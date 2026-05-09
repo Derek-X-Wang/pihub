@@ -18,6 +18,14 @@ export interface AliasStoreShape {
   ) => Effect.Effect<void, AliasStoreError | AliasCollisionError>;
   readonly remove: (short: string) => Effect.Effect<void, AliasStoreError | AliasNotFoundError>;
   /**
+   * Remove every alias whose value (canonical name) matches `canonical` —
+   * either the agent root (`<owner>/<repo>`) or one of its sub-agent ids
+   * (`<owner>/<repo>:<sub>`). Returns the shorts that were dropped.
+   */
+  readonly removeForCanonical: (
+    canonical: string,
+  ) => Effect.Effect<ReadonlyArray<string>, AliasStoreError>;
+  /**
    * Resolves a name through the alias map. Returns `name` unchanged when no
    * alias is set, so callers can chain "alias → registry lookup".
    */
@@ -122,6 +130,23 @@ export class AliasStore extends Context.Tag("AliasStore")<AliasStore, AliasStore
             delete next[short];
             yield* write({ ...cur, map: next });
           }),
+        removeForCanonical: (canonical) =>
+          Effect.gen(function* () {
+            const cur = yield* read;
+            const dropped: Array<string> = [];
+            const next: Record<string, string> = {};
+            for (const [short, value] of Object.entries(cur.map)) {
+              if (value === canonical || value.startsWith(`${canonical}:`)) {
+                dropped.push(short);
+              } else {
+                next[short] = value;
+              }
+            }
+            if (dropped.length > 0) {
+              yield* write({ ...cur, map: next });
+            }
+            return dropped;
+          }),
         resolve: (name) => read.pipe(Effect.map((a) => a.map[name] ?? name)),
       } satisfies AliasStoreShape;
     }),
@@ -166,6 +191,23 @@ export class AliasStore extends Context.Tag("AliasStore")<AliasStore, AliasStore
                 delete next[short];
                 return { ...a, map: next };
               });
+            }),
+          removeForCanonical: (canonical) =>
+            Effect.gen(function* () {
+              const cur = yield* Ref.get(store);
+              const dropped: Array<string> = [];
+              const next: Record<string, string> = {};
+              for (const [short, value] of Object.entries(cur.map)) {
+                if (value === canonical || value.startsWith(`${canonical}:`)) {
+                  dropped.push(short);
+                } else {
+                  next[short] = value;
+                }
+              }
+              if (dropped.length > 0) {
+                yield* Ref.update(store, (a) => ({ ...a, map: next }));
+              }
+              return dropped;
             }),
           resolve: (name) => Ref.get(store).pipe(Effect.map((a) => a.map[name] ?? name)),
         } satisfies AliasStoreShape;
