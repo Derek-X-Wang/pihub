@@ -2,9 +2,11 @@ import { Command } from "@effect/cli";
 import { aliasCommand } from "./commands/alias.js";
 import { describeCommand } from "./commands/describe.js";
 import { envCommand } from "./commands/env.js";
+import { gcLogsCommand } from "./commands/gc-logs.js";
 import { installCommand } from "./commands/install.js";
 import { invokeCommand } from "./commands/invoke.js";
 import { listCommand } from "./commands/list.js";
+import { logsCommand } from "./commands/logs.js";
 
 export const rootCommand = Command.make("pihub").pipe(
   Command.withDescription(
@@ -17,5 +19,7 @@ export const rootCommand = Command.make("pihub").pipe(
     invokeCommand,
     envCommand,
     aliasCommand,
+    logsCommand,
+    gcLogsCommand,
   ]),
 );

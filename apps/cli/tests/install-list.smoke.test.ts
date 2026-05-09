@@ -6,6 +6,7 @@ import {
   GithubApi,
   Installer,
   LockfileStore,
+  LogStore,
   ManifestParser,
   NpmRegistry,
   Paths,
@@ -38,6 +39,7 @@ const buildLiveLayer = (homeDir: string) => {
     RuntimeSlotManager.Test(new Map([["*", "/fake/pi"]])),
     PiInstaller.Test(),
     AliasStore.Test(),
+    LogStore.Test(),
   );
   const Leaves = Layer.mergeAll(
     ShapeDetector.Live,
