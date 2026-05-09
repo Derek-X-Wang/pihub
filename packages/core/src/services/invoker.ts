@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { Context, Effect, Layer, Schema } from "effect";
 import {
   AgentNotFoundError,
+  EnvFileError,
   InvokeCwdNotFoundError,
   InvokeInvalidArgsError,
   InvokeOutputError,
@@ -15,6 +16,7 @@ import {
   RuntimeSlotError,
 } from "../errors.js";
 import { Paths } from "../paths.js";
+import { EnvResolver } from "./env-resolver.js";
 import { RegistryStore } from "./registry-store.js";
 import { RuntimeSlotManager } from "./runtime-slot.js";
 
@@ -54,7 +56,8 @@ export type InvokerError =
   | InvokeSpawnError
   | InvokeOutputError
   | InvokeCwdNotFoundError
-  | InvokeInvalidArgsError;
+  | InvokeInvalidArgsError
+  | EnvFileError;
 
 export interface InvokeOptions {
   /** Override the cwd handed to pi. Mutually exclusive with `sandbox`. */
@@ -227,6 +230,7 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
       const registry = yield* RegistryStore;
       const runtime = yield* RuntimeSlotManager;
       const paths = yield* Paths;
+      const envResolver = yield* EnvResolver;
       return {
         invoke: (name, task, opts) =>
           Effect.gen(function* () {
@@ -266,8 +270,13 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
             const entry = yield* lookupRegistry(registry, name);
             const binary = yield* runtime.ensureSlot(entry.piSlot);
             const profile = paths.agentProfile(agentRootOf(name));
+            const allowlist = entry.envDeclared.length > 0 ? entry.envDeclared : undefined;
+            const resolved = yield* envResolver.resolve(agentRootOf(name), allowlist);
+            // PI_CODING_AGENT_DIR / PI_PACKAGE_DIR are PiHub plumbing — they
+            // override any value the resolver layers might have set so the
+            // profile-isolation invariant from CONTEXT.md holds.
             const env: Record<string, string> = {
-              ...process.env,
+              ...resolved,
               PI_CODING_AGENT_DIR: profile,
               PI_PACKAGE_DIR: path.join(profile, "packages"),
             };

@@ -4,6 +4,8 @@ import { BunContext, BunRuntime } from "@effect/platform-bun";
 import {
   BunInstaller,
   Describe,
+  EnvResolver,
+  EnvStore,
   GitClient,
   GithubApi,
   Installer,
@@ -35,6 +37,10 @@ const Base = Layer.mergeAll(
   PiInstaller.Live,
 );
 
+// EnvResolver depends on EnvStore + Paths; chain so the merged layer
+// surfaces both Resolver and Store outputs to the rest of the app.
+const EnvLayers = EnvResolver.Live.pipe(Layer.provideMerge(EnvStore.Live));
+
 const Leaves = Layer.mergeAll(
   ShapeDetector.Live,
   ManifestParser.Live,
@@ -43,6 +49,7 @@ const Leaves = Layer.mergeAll(
   LockfileStore.Live,
   RegistryStore.Live,
   RuntimeSlotManager.Live,
+  EnvLayers,
 ).pipe(Layer.provideMerge(Base));
 
 const AppLayer = Layer.mergeAll(Installer.Live, Describe.Live, Invoker.Live).pipe(
