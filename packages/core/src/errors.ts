@@ -146,3 +146,20 @@ export class PiInstallError extends Schema.TaggedError<PiInstallError>()("PiInst
   profile: Schema.String,
   message: Schema.String,
 }) {}
+
+/** `--cwd <path>` was supplied but the path does not exist. */
+export class InvokeCwdNotFoundError extends Schema.TaggedError<InvokeCwdNotFoundError>()(
+  "InvokeCwdNotFoundError",
+  {
+    cwd: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+/** Mutually exclusive invoke flags were combined (e.g. --cwd + --sandbox). */
+export class InvokeInvalidArgsError extends Schema.TaggedError<InvokeInvalidArgsError>()(
+  "InvokeInvalidArgsError",
+  {
+    message: Schema.String,
+  },
+) {}
