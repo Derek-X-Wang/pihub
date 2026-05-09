@@ -48,6 +48,11 @@ export interface LogStoreShape {
     ReadonlyArray<{ readonly agent: string; readonly deleted: number }>,
     LogStoreError
   >;
+  /**
+   * Delete every invocation attributed to `agent`. Used by `pihub remove`.
+   * Returns the number of invocations deleted.
+   */
+  readonly removeForAgent: (agent: string) => Effect.Effect<number, LogStoreError>;
 }
 
 interface LogPaths {
@@ -230,7 +235,29 @@ export class LogStore extends Context.Tag("LogStore")<LogStore, LogStoreShape>()
           return out;
         });
 
-      return { record, listForAgent, readEvents, prune, pruneAll } satisfies LogStoreShape;
+      const removeForAgent: LogStoreShape["removeForAgent"] = (agent) =>
+        Effect.gen(function* () {
+          const all = yield* collectAll(fs, lp);
+          const matching = all.filter((m) => m.meta.agent === agent);
+          for (const item of matching) {
+            yield* fs
+              .remove(lp.eventsFile(item.date, item.meta.invocationId))
+              .pipe(Effect.catchAll(() => Effect.void));
+            yield* fs
+              .remove(lp.metaFile(item.date, item.meta.invocationId))
+              .pipe(Effect.catchAll(() => Effect.void));
+          }
+          return matching.length;
+        });
+
+      return {
+        record,
+        listForAgent,
+        readEvents,
+        prune,
+        pruneAll,
+        removeForAgent,
+      } satisfies LogStoreShape;
     }),
   );
 
@@ -327,6 +354,15 @@ export class LogStore extends Context.Tag("LogStore")<LogStore, LogStoreShape>()
                 out.push({ agent: a, deleted: toDelete.length });
               }
               return out;
+            }),
+          removeForAgent: (agent) =>
+            Ref.modify(records, (m) => {
+              const ids = [...m.entries()]
+                .filter(([, r]) => r.meta.agent === agent)
+                .map(([id]) => id);
+              const next = new Map(m);
+              for (const id of ids) next.delete(id);
+              return [ids.length, next];
             }),
         } satisfies LogStoreShape;
       }),

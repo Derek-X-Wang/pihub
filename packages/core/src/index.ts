@@ -26,4 +26,5 @@ export * from "./services/env-resolver.js";
 export * from "./services/alias-store.js";
 export * from "./services/log-store.js";
 export * from "./services/ephemeral-runner.js";
+export * from "./services/remover.js";
 export * from "./lib/dotenv.js";
