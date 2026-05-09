@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect } from "vitest";
 import { Paths } from "../../src/paths.js";
+import { AliasStore } from "../../src/services/alias-store.js";
 import { EnvResolver } from "../../src/services/env-resolver.js";
 import type { InvokeOptions } from "../../src/services/invoker.js";
 import { Invoker } from "../../src/services/invoker.js";
@@ -64,6 +65,7 @@ const buildLayer = (
   binaryPath: string,
   entries: ReadonlyArray<RegistryEntry>,
   resolverSeed?: ReadonlyMap<string, Record<string, string>>,
+  aliasSeed?: ReadonlyMap<string, string>,
 ) =>
   Invoker.Live.pipe(
     Layer.provide(
@@ -73,6 +75,7 @@ const buildLayer = (
         RegistryStore.Test(entries),
         RuntimeSlotManager.Test(new Map([["0.74", binaryPath]])),
         EnvResolver.Test(resolverSeed),
+        AliasStore.Test(aliasSeed),
       ),
     ),
   );
@@ -468,6 +471,40 @@ describe("Invoker (live spawn against faux-pi shell script)", () => {
         expect(result.exitCode).toBe(130);
       }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
     15000,
+  );
+
+  it.effect("alias resolution: invoke <short> resolves to the canonical entry", () =>
+    Effect.gen(function* () {
+      const profile = path.join(home, "agents", "sample-beta-agent", "profile");
+      yield* Effect.promise(() =>
+        writeFauxPi(
+          path.join(home, "fakebin"),
+          [
+            JSON.stringify({
+              type: "message_end",
+              message: { role: "assistant", content: [{ type: "text", text: "via alias" }] },
+            }),
+          ],
+          0,
+          profile,
+        ),
+      );
+      const invoker = yield* Invoker;
+      // `aws` aliases to `sample-beta-agent:scout` per the seed.
+      const result = yield* invoker.invoke("aws", "ping");
+      expect(result.exitCode).toBe(0);
+      expect(result.text).toBe("via alias");
+    }).pipe(
+      Effect.provide(
+        buildLayer(
+          home,
+          path.join(home, "fakebin", "pi"),
+          [sampleEntry],
+          undefined,
+          new Map([["aws", "sample-beta-agent:scout"]]),
+        ),
+      ),
+    ),
   );
 
   it.effect(

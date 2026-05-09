@@ -23,4 +23,5 @@ export * from "./services/invoker.js";
 export * from "./services/pi-installer.js";
 export * from "./services/env-store.js";
 export * from "./services/env-resolver.js";
+export * from "./services/alias-store.js";
 export * from "./lib/dotenv.js";
