@@ -46,3 +46,30 @@ export class ProfileError extends Schema.TaggedError<ProfileError>()("ProfileErr
   name: Schema.String,
   message: Schema.String,
 }) {}
+
+/** A remote source (github / npm) failed to fetch — outer wrapper for clone-time failures. */
+export class SourceFetchError extends Schema.TaggedError<SourceFetchError>()("SourceFetchError", {
+  source: Schema.String,
+  message: Schema.String,
+}) {}
+
+/** A requested git ref (tag, branch, sha) does not exist on the remote. */
+export class RefNotFoundError extends Schema.TaggedError<RefNotFoundError>()("RefNotFoundError", {
+  repo: Schema.String,
+  ref: Schema.String,
+  message: Schema.String,
+}) {}
+
+/** Generic GitHub API error: HTTP failure, rate limit, or unexpected payload. */
+export class GithubApiError extends Schema.TaggedError<GithubApiError>()("GithubApiError", {
+  repo: Schema.String,
+  message: Schema.String,
+  status: Schema.optional(Schema.Number),
+}) {}
+
+/** `git clone`/`checkout` shelled-out command failed. */
+export class GitCloneError extends Schema.TaggedError<GitCloneError>()("GitCloneError", {
+  url: Schema.String,
+  dest: Schema.String,
+  message: Schema.String,
+}) {}

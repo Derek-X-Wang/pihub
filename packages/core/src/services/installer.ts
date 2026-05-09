@@ -4,13 +4,18 @@ import * as path from "node:path";
 import {
   CopyError,
   FrontmatterParseError,
+  GitCloneError,
+  GithubApiError,
   InvalidShapeError,
   LockfileError,
   ManifestParseError,
   ProfileError,
+  RefNotFoundError,
   RegistryError,
+  SourceFetchError,
   SourceNotFoundError,
 } from "../errors.js";
+import { parseSource } from "../lib/parse-source.js";
 import { Paths } from "../paths.js";
 import type { BetaAgentInfo, SourceInfo } from "../types.js";
 import { LockfileStore } from "./lockfile-store.js";
@@ -28,7 +33,11 @@ export type InstallerError =
   | CopyError
   | ProfileError
   | LockfileError
-  | RegistryError;
+  | RegistryError
+  | SourceFetchError
+  | GithubApiError
+  | RefNotFoundError
+  | GitCloneError;
 
 export interface InstallResult {
   readonly agentRoot: string;
@@ -42,10 +51,18 @@ export interface InstallerShape {
 
 /**
  * Derive the canonical agent-root name from a source URL or local path. For
- * local paths this is the basename of the absolute resolved path. Slice #4+
- * adds `<owner>/<repo>` derivation for github URLs.
+ * local paths this is the basename of the absolute resolved path; for GitHub
+ * sources it is `<owner>/<repo>`. The `:` separator for sub-agents (β) is
+ * appended later when registry entries are built.
  */
 const computeAgentRoot = (source: string): string => {
+  const parsed = parseSource(source);
+  if (parsed?.kind === "github") return `${parsed.owner}/${parsed.repo}`;
+  if (parsed?.kind === "local") {
+    return path.basename(parsed.absolutePath.replace(/\/+$/, ""));
+  }
+  // Fallback path: keep the legacy behaviour for unrecognised inputs so the
+  // ensuing SourceFetcher.fetch produces a clean SourceNotFoundError.
   const resolved = path.isAbsolute(source) ? source : path.resolve(source);
   return path.basename(resolved.replace(/\/+$/, ""));
 };
@@ -101,7 +118,7 @@ export class Installer extends Context.Tag("Installer")<Installer, InstallerShap
               return yield* Effect.fail(
                 new InvalidShapeError({
                   source,
-                  message: `slice #3 supports only shape β; detected ${detection.kind}`,
+                  message: `slices #3/#4 support only shape β; detected ${detection.kind}`,
                 }),
               );
             }
