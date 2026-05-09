@@ -29,6 +29,28 @@ The model is **deterministic orchestration around probabilistic intelligence** â
 
 See [`CONTEXT.md`](CONTEXT.md) for the full domain glossary and locked design decisions, and [`docs/adr/`](docs/adr/) for ADRs.
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Derek-X-Wang/pihub/main/install.sh | sh
+```
+
+The script detects your platform (`darwin-arm64`, `darwin-x64`, `linux-x64`, or `linux-arm64`), downloads the matching tarball from the [latest GitHub Release](https://github.com/Derek-X-Wang/pihub/releases/latest), verifies the SHA-256 checksum, and drops the binary at `~/.local/bin/pihub`.
+
+To pin a specific version:
+
+```bash
+PIHUB_VERSION=v0.1.0 sh -c "$(curl -fsSL https://raw.githubusercontent.com/Derek-X-Wang/pihub/main/install.sh)"
+```
+
+To choose a different install directory:
+
+```bash
+PIHUB_INSTALL_DIR=/opt/pihub sh -c "$(curl -fsSL https://raw.githubusercontent.com/Derek-X-Wang/pihub/main/install.sh)"
+```
+
+After install, ensure `~/.local/bin` is on your `PATH` and run `pihub --version` to verify.
+
 ## Development
 
 Requires [Bun](https://bun.sh) â‰¥ 1.x.
