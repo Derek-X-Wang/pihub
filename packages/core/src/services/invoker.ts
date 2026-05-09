@@ -13,7 +13,13 @@ import { RegistryStore } from "./registry-store.js";
 import { RuntimeSlotManager } from "./runtime-slot.js";
 
 export interface InvokeResult {
+  /** Final assistant text (default text projection). */
   readonly text: string;
+  /** Raw `pi --mode json` stdout — JSONL event stream (--stream passthrough). */
+  readonly raw: string;
+  /** stderr captured from pi for surfacing on non-zero exit. */
+  readonly stderr: string;
+  /** pi process exit code. */
   readonly exitCode: number;
 }
 
@@ -155,16 +161,13 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
                 ),
               catch: (e) => new InvokeSpawnError({ binary, message: `spawn failed: ${String(e)}` }),
             });
-            if (result.exitCode !== 0) {
-              // Forward stderr as our error message; preserve exitCode for the
-              // CLI to translate into a process exit code.
-              return {
-                text: result.stderr.trim(),
-                exitCode: result.exitCode,
-              } satisfies InvokeResult;
-            }
-            const text = finalAssistantText(result.stdout);
-            return { text, exitCode: 0 } satisfies InvokeResult;
+            const text = result.exitCode === 0 ? finalAssistantText(result.stdout) : "";
+            return {
+              text,
+              raw: result.stdout,
+              stderr: result.stderr,
+              exitCode: result.exitCode,
+            } satisfies InvokeResult;
           }),
       } satisfies InvokerShape;
     }),

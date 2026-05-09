@@ -162,4 +162,36 @@ describe("Invoker (live spawn against faux-pi shell script)", () => {
       expect(JSON.stringify(exit)).toContain("AgentNotFoundError");
     }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), []))),
   );
+
+  it.effect("--stream-mode raw passthrough — every emitted line is preserved verbatim", () =>
+    Effect.gen(function* () {
+      const profile = path.join(home, "agents", "sample-beta-agent", "profile");
+      const events = [
+        JSON.stringify({ type: "session", id: "abc" }),
+        JSON.stringify({ type: "agent_start" }),
+        JSON.stringify({
+          type: "tool_execution_start",
+          toolCallId: "t1",
+          toolName: "bash",
+          args: { cmd: "echo" },
+        }),
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "stream pass-through OK" }],
+          },
+        }),
+        JSON.stringify({ type: "agent_end", messages: [] }),
+      ];
+      yield* Effect.promise(() => writeFauxPi(path.join(home, "fakebin"), events, 0, profile));
+      const invoker = yield* Invoker;
+      const result = yield* invoker.invoke("sample-beta-agent:scout", "ping");
+      // Raw stdout should contain every event in order, one per line.
+      const lines = result.raw.trim().split(/\r?\n/);
+      expect(lines).toEqual(events);
+      // Default text projection still extracts the final assistant text.
+      expect(result.text).toBe("stream pass-through OK");
+    }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+  );
 });
