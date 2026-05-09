@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { Context, Effect, Layer, Schema } from "effect";
 import {
   AgentNotFoundError,
+  AliasStoreError,
   EnvFileError,
   InvokeCwdNotFoundError,
   InvokeInvalidArgsError,
@@ -16,6 +17,7 @@ import {
   RuntimeSlotError,
 } from "../errors.js";
 import { Paths } from "../paths.js";
+import { AliasStore } from "./alias-store.js";
 import { EnvResolver } from "./env-resolver.js";
 import { RegistryStore } from "./registry-store.js";
 import { RuntimeSlotManager } from "./runtime-slot.js";
@@ -57,7 +59,8 @@ export type InvokerError =
   | InvokeOutputError
   | InvokeCwdNotFoundError
   | InvokeInvalidArgsError
-  | EnvFileError;
+  | EnvFileError
+  | AliasStoreError;
 
 export interface InvokeOptions {
   /** Override the cwd handed to pi. Mutually exclusive with `sandbox`. */
@@ -231,6 +234,7 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
       const runtime = yield* RuntimeSlotManager;
       const paths = yield* Paths;
       const envResolver = yield* EnvResolver;
+      const aliasStore = yield* AliasStore;
       return {
         invoke: (name, task, opts) =>
           Effect.gen(function* () {
@@ -267,11 +271,14 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
               }
             }
 
-            const entry = yield* lookupRegistry(registry, name);
+            // Resolve aliases first; falls through to the supplied name when
+            // no alias is set.
+            const canonical = yield* aliasStore.resolve(name);
+            const entry = yield* lookupRegistry(registry, canonical);
             const binary = yield* runtime.ensureSlot(entry.piSlot);
-            const profile = paths.agentProfile(agentRootOf(name));
+            const profile = paths.agentProfile(agentRootOf(canonical));
             const allowlist = entry.envDeclared.length > 0 ? entry.envDeclared : undefined;
-            const resolved = yield* envResolver.resolve(agentRootOf(name), allowlist);
+            const resolved = yield* envResolver.resolve(agentRootOf(canonical), allowlist);
             // PI_CODING_AGENT_DIR / PI_PACKAGE_DIR are PiHub plumbing — they
             // override any value the resolver layers might have set so the
             // profile-isolation invariant from CONTEXT.md holds.

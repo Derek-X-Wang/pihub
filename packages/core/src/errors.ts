@@ -175,3 +175,26 @@ export class EnvParseError extends Schema.TaggedError<EnvParseError>()("EnvParse
   input: Schema.String,
   message: Schema.String,
 }) {}
+
+/** AliasStore I/O or schema validation failed. */
+export class AliasStoreError extends Schema.TaggedError<AliasStoreError>()("AliasStoreError", {
+  message: Schema.String,
+}) {}
+
+/** `pihub alias <short>=<canonical>` collided with an existing alias or canonical name. */
+export class AliasCollisionError extends Schema.TaggedError<AliasCollisionError>()(
+  "AliasCollisionError",
+  {
+    name: Schema.String,
+    message: Schema.String,
+  },
+) {}
+
+/** `pihub alias remove <short>` referenced a name that doesn't exist. */
+export class AliasNotFoundError extends Schema.TaggedError<AliasNotFoundError>()(
+  "AliasNotFoundError",
+  {
+    name: Schema.String,
+    message: Schema.String,
+  },
+) {}

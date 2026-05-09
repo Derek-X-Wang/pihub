@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest";
 import { BunContext } from "@effect/platform-bun";
 import {
+  AliasStore,
   GitClient,
   GithubApi,
   Installer,
@@ -36,6 +37,7 @@ const buildLiveLayer = (homeDir: string) => {
     TarExtractor.Test(),
     RuntimeSlotManager.Test(new Map([["*", "/fake/pi"]])),
     PiInstaller.Test(),
+    AliasStore.Test(),
   );
   const Leaves = Layer.mergeAll(
     ShapeDetector.Live,
