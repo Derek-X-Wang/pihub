@@ -138,3 +138,11 @@ export class InvokeOutputError extends Schema.TaggedError<InvokeOutputError>()(
     message: Schema.String,
   },
 ) {}
+
+/** `pi install` (slice #9 shape-α profile install) returned non-zero. */
+export class PiInstallError extends Schema.TaggedError<PiInstallError>()("PiInstallError", {
+  binary: Schema.String,
+  source: Schema.String,
+  profile: Schema.String,
+  message: Schema.String,
+}) {}

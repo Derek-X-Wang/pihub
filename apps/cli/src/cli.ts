@@ -12,6 +12,7 @@ import {
   ManifestParser,
   NpmRegistry,
   Paths,
+  PiInstaller,
   Profile,
   RegistryStore,
   RuntimeSlotManager,
@@ -31,6 +32,7 @@ const Base = Layer.mergeAll(
   NpmRegistry.Live,
   TarExtractor.Live,
   BunInstaller.Live,
+  PiInstaller.Live,
 );
 
 const Leaves = Layer.mergeAll(

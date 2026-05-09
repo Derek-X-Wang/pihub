@@ -66,6 +66,67 @@ const parseAgentMd = (
     };
   });
 
+/**
+ * Try shape α first: read `package.json` and look for the `pi` field. The
+ * caller falls back to β detection only if this returns `null` (no
+ * package.json or no `pi` field). Per CONTEXT.md "Detection rules", α wins
+ * over β when both are present.
+ */
+const tryAlpha = (
+  fs: FileSystem.FileSystem,
+  sourceDir: string,
+): Effect.Effect<DetectionResult | null, InvalidShapeError> =>
+  Effect.gen(function* () {
+    const pkgPath = path.join(sourceDir, "package.json");
+    const exists = yield* fs.exists(pkgPath).pipe(Effect.orElseSucceed(() => false));
+    if (!exists) return null;
+    const raw = yield* fs.readFileString(pkgPath).pipe(
+      Effect.mapError(
+        (e) =>
+          new InvalidShapeError({
+            source: sourceDir,
+            message: `failed to read package.json: ${String(e)}`,
+          }),
+      ),
+    );
+    const parsed = yield* Effect.try({
+      try: () => JSON.parse(raw) as Record<string, unknown>,
+      catch: (e) =>
+        new InvalidShapeError({
+          source: sourceDir,
+          message: `failed to parse package.json: ${String(e)}`,
+        }),
+    });
+    const piField = parsed["pi"];
+    if (typeof piField !== "object" || piField === null) return null;
+    const piObj = piField as Record<string, unknown>;
+    const packageName = typeof parsed["name"] === "string" ? parsed["name"] : "";
+    if (packageName.length === 0) {
+      return yield* Effect.fail(
+        new InvalidShapeError({
+          source: sourceDir,
+          message: "package.json has `pi` field but no `name`",
+        }),
+      );
+    }
+    const piDescription =
+      typeof piObj["description"] === "string" ? (piObj["description"] as string) : undefined;
+    const pkgDescription =
+      typeof parsed["description"] === "string" ? (parsed["description"] as string) : undefined;
+    const description = piDescription ?? pkgDescription ?? "";
+    const deps = parsed["dependencies"];
+    const piRange =
+      typeof deps === "object" && deps !== null
+        ? typeof (deps as Record<string, unknown>)["@mariozechner/pi-coding-agent"] === "string"
+          ? ((deps as Record<string, string>)["@mariozechner/pi-coding-agent"] as string)
+          : undefined
+        : undefined;
+    return {
+      kind: "alpha",
+      info: { packageName, description, piRange },
+    } satisfies DetectionResult;
+  });
+
 const detectBeta = (
   fs: FileSystem.FileSystem,
   sourceDir: string,
@@ -125,7 +186,12 @@ export class ShapeDetector extends Context.Tag("ShapeDetector")<
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       return ShapeDetector.of({
-        detect: (sourceDir) => detectBeta(fs, sourceDir),
+        detect: (sourceDir) =>
+          Effect.gen(function* () {
+            const alpha = yield* tryAlpha(fs, sourceDir);
+            if (alpha) return alpha;
+            return yield* detectBeta(fs, sourceDir);
+          }),
       });
     }),
   );

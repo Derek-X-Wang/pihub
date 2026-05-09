@@ -8,8 +8,10 @@ import {
   ManifestParser,
   NpmRegistry,
   Paths,
+  PiInstaller,
   Profile,
   RegistryStore,
+  RuntimeSlotManager,
   ShapeDetector,
   SourceFetcher,
   TarExtractor,
@@ -32,6 +34,8 @@ const buildLiveLayer = (homeDir: string) => {
     GitClient.Test(),
     NpmRegistry.Test(),
     TarExtractor.Test(),
+    RuntimeSlotManager.Test(new Map([["*", "/fake/pi"]])),
+    PiInstaller.Test(),
   );
   const Leaves = Layer.mergeAll(
     ShapeDetector.Live,

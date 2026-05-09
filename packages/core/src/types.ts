@@ -6,13 +6,22 @@ export interface BetaAgentInfo {
   readonly mdPath: string;
 }
 
+/** Information extracted from a shape-α (Pi package) repo's `package.json`. */
+export interface AlphaAgentInfo {
+  /** The package's published name (`@scope/pkg` or `pkg`). */
+  readonly packageName: string;
+  /** Effective human description: `pi.description` if set, else `description`. */
+  readonly description: string;
+  /** Raw semver range from `dependencies["@mariozechner/pi-coding-agent"]`, if any. */
+  readonly piRange: string | undefined;
+}
+
 /**
  * Outcome of inspecting a repo for shape α (Pi package via `package.json.pi`)
- * or shape β (markdown agents under `agents/*.md`). Slice #3 ships β only;
- * the α branch is a stub completed in slice #9.
+ * or shape β (markdown agents under `agents/*.md`).
  */
 export type DetectionResult =
-  | { readonly kind: "alpha" }
+  | { readonly kind: "alpha"; readonly info: AlphaAgentInfo }
   | { readonly kind: "beta"; readonly agents: ReadonlyArray<BetaAgentInfo> };
 
 /**
