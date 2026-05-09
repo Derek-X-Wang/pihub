@@ -21,3 +21,6 @@ export * from "./services/bun-installer.js";
 export * from "./services/runtime-slot.js";
 export * from "./services/invoker.js";
 export * from "./services/pi-installer.js";
+export * from "./services/env-store.js";
+export * from "./services/env-resolver.js";
+export * from "./lib/dotenv.js";

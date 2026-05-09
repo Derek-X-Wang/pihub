@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect } from "vitest";
 import { Paths } from "../../src/paths.js";
+import { EnvResolver } from "../../src/services/env-resolver.js";
 import type { InvokeOptions } from "../../src/services/invoker.js";
 import { Invoker } from "../../src/services/invoker.js";
 import { RegistryStore } from "../../src/services/registry-store.js";
@@ -58,7 +59,12 @@ const writeFauxPi = async (
   return binPath;
 };
 
-const buildLayer = (homeDir: string, binaryPath: string, entries: ReadonlyArray<RegistryEntry>) =>
+const buildLayer = (
+  homeDir: string,
+  binaryPath: string,
+  entries: ReadonlyArray<RegistryEntry>,
+  resolverSeed?: ReadonlyMap<string, Record<string, string>>,
+) =>
   Invoker.Live.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -66,6 +72,7 @@ const buildLayer = (homeDir: string, binaryPath: string, entries: ReadonlyArray<
         BunContext.layer,
         RegistryStore.Test(entries),
         RuntimeSlotManager.Test(new Map([["0.74", binaryPath]])),
+        EnvResolver.Test(resolverSeed),
       ),
     ),
   );

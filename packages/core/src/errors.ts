@@ -163,3 +163,15 @@ export class InvokeInvalidArgsError extends Schema.TaggedError<InvokeInvalidArgs
     message: Schema.String,
   },
 ) {}
+
+/** Reading or writing a `~/.pihub/...env` file failed (incl. mode-0600 enforcement). */
+export class EnvFileError extends Schema.TaggedError<EnvFileError>()("EnvFileError", {
+  path: Schema.String,
+  message: Schema.String,
+}) {}
+
+/** `pihub env set KEY=value` got malformed input. */
+export class EnvParseError extends Schema.TaggedError<EnvParseError>()("EnvParseError", {
+  input: Schema.String,
+  message: Schema.String,
+}) {}
