@@ -5,8 +5,10 @@ import { Paths } from "../../src/paths.js";
 import { Installer } from "../../src/services/installer.js";
 import { LockfileStore } from "../../src/services/lockfile-store.js";
 import { ManifestParser } from "../../src/services/manifest-parser.js";
+import { PiInstaller } from "../../src/services/pi-installer.js";
 import { Profile } from "../../src/services/profile.js";
 import { RegistryStore } from "../../src/services/registry-store.js";
+import { RuntimeSlotManager } from "../../src/services/runtime-slot.js";
 import { ShapeDetector } from "../../src/services/shape-detector.js";
 import { SourceFetcher } from "../../src/services/source-fetcher.js";
 import type { DetectionResult } from "../../src/types.js";
@@ -22,18 +24,22 @@ const detection: DetectionResult = {
   ],
 };
 
-const buildAppLayer = () => {
+const buildAppLayer = (
+  detectMap: ReadonlyMap<string, DetectionResult> = new Map([
+    [`${TEST_HOME}/agents/sample-beta-agent/repo`, detection],
+  ]),
+) => {
   const pathsLayer = Paths.Test(TEST_HOME);
-  // Repo path the Installer hands to ShapeDetector — Paths.Test computes it.
-  const repoPath = `${TEST_HOME}/agents/sample-beta-agent/repo`;
   const fakes = Layer.mergeAll(
     pathsLayer,
     SourceFetcher.Test(),
-    ShapeDetector.Test(new Map([[repoPath, detection]])),
+    ShapeDetector.Test(detectMap),
     ManifestParser.Test(),
     Profile.Test(),
     LockfileStore.Test(),
     RegistryStore.Test(),
+    RuntimeSlotManager.Test(new Map([["*", "/fake/pi"]])),
+    PiInstaller.Test(),
   );
   return Installer.Live.pipe(Layer.provideMerge(fakes));
 };
@@ -150,6 +156,8 @@ describe("Installer (--frozen flag)", () => {
             ]),
           ),
           RegistryStore.Test(),
+          RuntimeSlotManager.Test(new Map([["*", "/fake/pi"]])),
+          PiInstaller.Test(),
         );
         return Installer.Live.pipe(Layer.provideMerge(fakes));
       })();
@@ -209,5 +217,64 @@ describe("Installer (--link flag)", () => {
       expect(exit._tag).toBe("Failure");
       expect(JSON.stringify(exit)).toContain("LinkSourceUnsupportedError");
     }).pipe(Effect.provide(buildAppLayer())),
+  );
+});
+
+describe("Installer (shape α)", () => {
+  const ALPHA_PATH = "/abs/sample-alpha-agent";
+  const alphaRepoPath = `${TEST_HOME}/agents/sample-alpha-agent/repo`;
+  const alphaDetect: DetectionResult = {
+    kind: "alpha",
+    info: {
+      packageName: "@example/sample-alpha-agent",
+      description: "alpha-shaped sample agent",
+      piRange: "^0.74.0",
+    },
+  };
+
+  it.effect("installs an α agent: invokes pi install + writes alpha registry entry", () =>
+    Effect.gen(function* () {
+      const installer = yield* Installer;
+      const result = yield* installer.install(ALPHA_PATH);
+      expect(result.cached).toBe(false);
+      expect(result.agentRoot).toBe("sample-alpha-agent");
+      expect(result.entries).toHaveLength(1);
+      expect(result.entries[0]?.shape).toBe("alpha");
+      expect(result.entries[0]?.name).toBe("sample-alpha-agent");
+      expect(result.entries[0]?.piSlot).toBe("0.74");
+
+      const lockStore = yield* LockfileStore;
+      const lock = yield* lockStore.read("sample-alpha-agent");
+      expect(lock._tag).toBe("Some");
+      if (lock._tag === "Some") {
+        expect(lock.value.piSlot).toBe("0.74");
+      }
+    }).pipe(Effect.provide(buildAppLayer(new Map([[alphaRepoPath, alphaDetect]])))),
+  );
+
+  it.effect("falls back to default piSlot when piRange is absent", () =>
+    Effect.gen(function* () {
+      const installer = yield* Installer;
+      const result = yield* installer.install(ALPHA_PATH);
+      expect(result.entries[0]?.piSlot).toBe("0.74");
+    }).pipe(
+      Effect.provide(
+        buildAppLayer(
+          new Map([
+            [
+              alphaRepoPath,
+              {
+                kind: "alpha",
+                info: {
+                  packageName: "@example/sample-alpha-agent",
+                  description: "no pi dep",
+                  piRange: undefined,
+                },
+              } as DetectionResult,
+            ],
+          ]),
+        ),
+      ),
+    ),
   );
 });

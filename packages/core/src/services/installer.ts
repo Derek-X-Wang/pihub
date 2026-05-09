@@ -12,19 +12,23 @@ import {
   LockfileError,
   ManifestParseError,
   NpmVersionNotFoundError,
+  PiInstallError,
   ProfileError,
   RefNotFoundError,
   RegistryError,
+  RuntimeSlotError,
   SourceFetchError,
   SourceNotFoundError,
 } from "../errors.js";
-import { parseSource } from "../lib/parse-source.js";
+import { extractPiMinor, parseSource } from "../lib/parse-source.js";
 import { Paths } from "../paths.js";
-import type { BetaAgentInfo, InstallOptions, SourceInfo } from "../types.js";
+import type { AlphaAgentInfo, BetaAgentInfo, InstallOptions, SourceInfo } from "../types.js";
 import { LockfileStore } from "./lockfile-store.js";
 import { ManifestParser } from "./manifest-parser.js";
+import { PiInstaller } from "./pi-installer.js";
 import { Profile } from "./profile.js";
 import { RegistryStore } from "./registry-store.js";
+import { RuntimeSlotManager } from "./runtime-slot.js";
 import { ShapeDetector } from "./shape-detector.js";
 import { SourceFetcher } from "./source-fetcher.js";
 
@@ -43,7 +47,9 @@ export type InstallerError =
   | GitCloneError
   | NpmVersionNotFoundError
   | FrozenDriftError
-  | LinkSourceUnsupportedError;
+  | LinkSourceUnsupportedError
+  | RuntimeSlotError
+  | PiInstallError;
 
 export interface InstallResult {
   readonly agentRoot: string;
@@ -103,6 +109,26 @@ const buildBetaEntry = (
   };
 };
 
+const buildAlphaEntry = (
+  agentRoot: string,
+  alpha: AlphaAgentInfo,
+  info: SourceInfo,
+  manifest: Manifest,
+  piSlot: string,
+): RegistryEntry => ({
+  name: agentRoot,
+  shape: "alpha",
+  piSlot,
+  source: info.source,
+  ref: info.ref,
+  commitSha: info.commitSha,
+  description: manifest.description || alpha.description || "",
+  invoke: `pihub invoke ${agentRoot} "<task>"`,
+  envDeclared: manifest.env ? [...manifest.env] : [],
+  linked: info.link,
+  permissions: manifest.permissions ? [...manifest.permissions] : [],
+});
+
 /**
  * Default Pi runtime slot until slice #17 implements per-agent minor
  * resolution from the agent's `package.json` deps. The label is the
@@ -112,6 +138,14 @@ const buildBetaEntry = (
  * via `pihub upgrade-runtime` once that command lands (slice #17).
  */
 const DEFAULT_PI_SLOT = "0.74";
+
+const resolvePiSlot = (alpha: AlphaAgentInfo): string => {
+  if (alpha.piRange) {
+    const minor = extractPiMinor(alpha.piRange);
+    if (minor) return minor;
+  }
+  return DEFAULT_PI_SLOT;
+};
 
 export class Installer extends Context.Tag("Installer")<Installer, InstallerShape>() {
   static readonly Live = Layer.effect(
@@ -123,6 +157,8 @@ export class Installer extends Context.Tag("Installer")<Installer, InstallerShap
       const profile = yield* Profile;
       const lockStore = yield* LockfileStore;
       const registry = yield* RegistryStore;
+      const runtimeSlots = yield* RuntimeSlotManager;
+      const piInstaller = yield* PiInstaller;
       const paths = yield* Paths;
 
       return Installer.of({
@@ -130,6 +166,7 @@ export class Installer extends Context.Tag("Installer")<Installer, InstallerShap
           Effect.gen(function* () {
             const agentRoot = computeAgentRoot(source);
             const repoPath = paths.agentRepo(agentRoot);
+            const profilePath = paths.agentProfile(agentRoot);
             const link = opts?.link === true;
             const frozen = opts?.frozen === true;
 
@@ -147,20 +184,16 @@ export class Installer extends Context.Tag("Installer")<Installer, InstallerShap
 
             const info = yield* fetcher.fetch(source, repoPath, link ? { link: true } : undefined);
             const detection = yield* detector.detect(repoPath);
-            if (detection.kind !== "beta") {
-              return yield* Effect.fail(
-                new InvalidShapeError({
-                  source,
-                  message: `slices #3/#4/#5 support only shape β; detected ${detection.kind}`,
-                }),
-              );
-            }
             const manifest = yield* manifestParser.parse(repoPath);
             yield* profile.ensure(agentRoot);
 
-            const entries = detection.agents.map((agent) =>
-              buildBetaEntry(agentRoot, agent, info, manifest, DEFAULT_PI_SLOT),
-            );
+            // Build the registry entries for whichever shape was detected.
+            const piSlot =
+              detection.kind === "alpha" ? resolvePiSlot(detection.info) : DEFAULT_PI_SLOT;
+            const entries: ReadonlyArray<RegistryEntry> =
+              detection.kind === "alpha"
+                ? [buildAlphaEntry(agentRoot, detection.info, info, manifest, piSlot)]
+                : detection.agents.map((a) => buildBetaEntry(agentRoot, a, info, manifest, piSlot));
 
             const existingLock = yield* lockStore.read(agentRoot);
             const cached = Option.match(existingLock, {
@@ -190,7 +223,6 @@ export class Installer extends Context.Tag("Installer")<Installer, InstallerShap
                   }),
                 );
               }
-              // Frozen + cached → no writes needed; return registry view.
               const reg = yield* registry.read;
               const existing = reg.agents.filter(
                 (a) => a.name === agentRoot || a.name.startsWith(`${agentRoot}:`),
@@ -213,11 +245,19 @@ export class Installer extends Context.Tag("Installer")<Installer, InstallerShap
               // Lockfile says cached but registry empty — repair by upserting.
             }
 
+            // Shape-α side-effect: ensure the runtime slot is populated and
+            // run `pi install <repo>` against this agent's profile so Pi
+            // loads the agent's extensions/skills/prompts/themes when invoked.
+            if (detection.kind === "alpha") {
+              const piBinary = yield* runtimeSlots.ensureSlot(piSlot);
+              yield* piInstaller.install(piBinary, repoPath, profilePath);
+            }
+
             yield* lockStore.write(agentRoot, {
               source: info.source,
               ref: info.ref,
               commitSha: info.commitSha,
-              piSlot: DEFAULT_PI_SLOT,
+              piSlot,
               depsLockSha: info.depsLockSha,
               installedAt: new Date().toISOString(),
               link: info.link,

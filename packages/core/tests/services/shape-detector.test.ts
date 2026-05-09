@@ -115,4 +115,87 @@ describe("ShapeDetector (live, real FS)", () => {
       expect(exit._tag).toBe("Failure");
     }).pipe(provideLive),
   );
+
+  it.effect("detects shape α when package.json has a `pi` field", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        fsp.writeFile(
+          path.join(tmp, "package.json"),
+          JSON.stringify(
+            {
+              name: "@example/sample-alpha-agent",
+              version: "0.0.1",
+              description: "alpha-shaped sample agent",
+              dependencies: { "@mariozechner/pi-coding-agent": "^0.74.0" },
+              pi: { extensions: ["./src/index.ts"] },
+            },
+            null,
+            2,
+          ),
+        ),
+      );
+
+      const detector = yield* ShapeDetector;
+      const result = yield* detector.detect(tmp);
+      expect(result.kind).toBe("alpha");
+      if (result.kind !== "alpha") return;
+      expect(result.info.packageName).toBe("@example/sample-alpha-agent");
+      expect(result.info.description).toBe("alpha-shaped sample agent");
+      expect(result.info.piRange).toBe("^0.74.0");
+    }).pipe(provideLive),
+  );
+
+  it.effect("α prefers pi.description over package.description", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        fsp.writeFile(
+          path.join(tmp, "package.json"),
+          JSON.stringify({
+            name: "pkg",
+            description: "fallback description",
+            pi: { description: "preferred description", skills: ["./skills/foo.md"] },
+          }),
+        ),
+      );
+
+      const detector = yield* ShapeDetector;
+      const result = yield* detector.detect(tmp);
+      if (result.kind !== "alpha") throw new Error("expected α");
+      expect(result.info.description).toBe("preferred description");
+    }).pipe(provideLive),
+  );
+
+  it.effect("α wins over β when both `pi` field and `agents/*.md` exist", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        fsp.writeFile(
+          path.join(tmp, "package.json"),
+          JSON.stringify({ name: "pkg", pi: { skills: [] } }),
+        ),
+      );
+      yield* Effect.promise(() => fsp.mkdir(path.join(tmp, "agents"), { recursive: true }));
+      yield* Effect.promise(() =>
+        fsp.writeFile(
+          path.join(tmp, "agents", "scout.md"),
+          ["---", "name: scout", "---", ""].join("\n"),
+        ),
+      );
+
+      const detector = yield* ShapeDetector;
+      const result = yield* detector.detect(tmp);
+      expect(result.kind).toBe("alpha");
+    }).pipe(provideLive),
+  );
+
+  it.effect("rejects malformed package.json with InvalidShapeError", () =>
+    Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        fsp.writeFile(path.join(tmp, "package.json"), "{ malformed json"),
+      );
+      const detector = yield* ShapeDetector;
+      const exit = yield* Effect.exit(detector.detect(tmp));
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("InvalidShapeError");
+    }).pipe(provideLive),
+  );
 });

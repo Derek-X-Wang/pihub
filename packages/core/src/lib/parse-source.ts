@@ -108,6 +108,18 @@ export const parseSource = (raw: string): ParsedSource | null => {
 export const isCommitSha = (ref: string): boolean => /^[0-9a-f]{40}$/.test(ref);
 
 /**
+ * Best-effort extraction of `<major>.<minor>` from a semver range string. Used
+ * to map `dependencies["@mariozechner/pi-coding-agent"]` (e.g. `^0.74.0`,
+ * `~0.74.1`, `>=0.74.0 <0.75.0`) into a runtime-slot directory name. Returns
+ * null if no `MAJOR.MINOR.PATCH` triple is found.
+ */
+export const extractPiMinor = (range: string): string | null => {
+  const m = /(\d+)\.(\d+)\.\d+/.exec(range);
+  if (!m) return null;
+  return `${m[1]}.${m[2]}`;
+};
+
+/**
  * Best-effort semver tag picker. Accepts `vMAJOR.MINOR.PATCH` (without
  * pre-release/build), returns the highest. Returns `null` if no tag matches.
  */

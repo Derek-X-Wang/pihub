@@ -1,0 +1,14 @@
+{
+  "name": "@example/sample-alpha-agent",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Sample shape-α agent fixture for PiHub Installer tests",
+  "type": "module",
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "^0.74.0"
+  },
+  "pi": {
+    "description": "Sample shape-α agent — declares a trivial extension",
+    "extensions": ["./src/index.ts"]
+  }
+}
