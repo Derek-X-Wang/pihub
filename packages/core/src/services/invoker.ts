@@ -1,4 +1,6 @@
+import { ToolCallSummary, Usage } from "@pihub/schema";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { Context, Effect, Layer, Schema } from "effect";
 import {
@@ -12,15 +14,29 @@ import { Paths } from "../paths.js";
 import { RegistryStore } from "./registry-store.js";
 import { RuntimeSlotManager } from "./runtime-slot.js";
 
+/**
+ * Aggregated outcome of a single Pi invocation. Carries both the default-text
+ * projection and the raw JSONL stream, plus the rich envelope-shaped fields
+ * (invocationId, durationMs, sessionId, usage, toolCalls, stopReason,
+ * errorMessage) so the CLI can render the slice-#11 envelope without a second
+ * pass over the stream.
+ */
 export interface InvokeResult {
-  /** Final assistant text (default text projection). */
   readonly text: string;
-  /** Raw `pi --mode json` stdout — JSONL event stream (--stream passthrough). */
   readonly raw: string;
-  /** stderr captured from pi for surfacing on non-zero exit. */
   readonly stderr: string;
-  /** pi process exit code. */
   readonly exitCode: number;
+  readonly invocationId: string;
+  readonly agent: string;
+  readonly version: string;
+  readonly durationMs: number;
+  readonly sessionId: string | undefined;
+  readonly usage: Usage;
+  readonly toolCalls: ReadonlyArray<ToolCallSummary>;
+  readonly stopReason: string | undefined;
+  readonly errorMessage: string;
+  readonly lastAssistantMessage: string;
+  readonly lastToolCall: unknown;
 }
 
 export type InvokerError =
@@ -34,29 +50,14 @@ export interface InvokerShape {
   readonly invoke: (agentName: string, task: string) => Effect.Effect<InvokeResult, InvokerError>;
 }
 
-/** Minimal slice of a pi `--mode json` `message_end` event that we read. */
+/** Minimal slice of pi's TextContent block. */
 const TextContent = Schema.Struct({
   type: Schema.Literal("text"),
   text: Schema.String,
 });
 
-const MessageEnd = Schema.Struct({
-  type: Schema.Literal("message_end"),
-  message: Schema.Struct({
-    role: Schema.String,
-    // `content` is a heterogeneous array; we only care about text blocks.
-    content: Schema.Array(Schema.Unknown),
-  }),
-});
-
-const decodeMessageEnd = Schema.decodeUnknown(MessageEnd);
 const decodeTextContent = Schema.decodeUnknown(TextContent);
 
-/**
- * Concatenate the `text` field from any TextContent blocks in a content array.
- * Pi may emit `text`, `thinking`, or `toolCall` blocks; only `text` is what
- * the default-mode CLI prints (matching `pi -p` semantics).
- */
 const extractText = (content: ReadonlyArray<unknown>): string => {
   const parts: string[] = [];
   for (const block of content) {
@@ -66,37 +67,101 @@ const extractText = (content: ReadonlyArray<unknown>): string => {
   return parts.join("");
 };
 
+const tryParseJson = (line: string): unknown | null => {
+  try {
+    return JSON.parse(line) as unknown;
+  } catch {
+    return null;
+  }
+};
+
+const numberOr = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+
+const stringOr = (v: unknown): string | undefined =>
+  typeof v === "string" && v.length > 0 ? v : undefined;
+
+interface AggregatedEvents {
+  readonly text: string;
+  readonly sessionId: string | undefined;
+  readonly usage: Usage;
+  readonly toolCalls: ReadonlyArray<ToolCallSummary>;
+  readonly stopReason: string | undefined;
+  readonly errorMessage: string;
+  readonly lastAssistantMessage: string;
+  readonly lastToolCall: unknown;
+}
+
 /**
- * Walk a JSONL `pi --mode json` stream and return the assistant text from
- * the LAST `message_end` whose message.role === "assistant". Mirrors
- * `pi -p` behaviour where the user only sees the final assistant text.
+ * Single-pass aggregator over a `pi --mode json` JSONL buffer. We only ever
+ * read what the envelope actually needs — unknown event types pass through.
+ * Trade-off: aggregation is O(n) but happens after the spawn returns;
+ * real-time streaming sits in slice #16's log capture.
  */
-const finalAssistantText = (stdout: string): string => {
-  let last = "";
+const aggregate = (stdout: string): AggregatedEvents => {
+  let lastAssistantText = "";
+  let lastAssistantMessage = "";
+  let lastToolCall: unknown = undefined;
+  let sessionId: string | undefined;
+  let stopReason: string | undefined;
+  let errorMessage = "";
+  let usageInput: number | undefined;
+  let usageOutput: number | undefined;
+  let usageCost: number | undefined;
+  const toolCalls: Array<ToolCallSummary> = [];
+
   for (const line of stdout.split(/\r?\n/)) {
     if (line.length === 0) continue;
-    const result = Effect.runSyncExit(
-      Effect.gen(function* () {
-        const raw = yield* Effect.try({
-          try: () => JSON.parse(line) as unknown,
-          catch: () => null,
-        });
-        if (raw === null) return null;
-        const isMsgEnd =
-          typeof raw === "object" &&
-          raw !== null &&
-          (raw as { type?: unknown }).type === "message_end";
-        if (!isMsgEnd) return null;
-        const me = yield* decodeMessageEnd(raw);
-        if (me.message.role !== "assistant") return null;
-        return extractText(me.message.content);
-      }),
-    );
-    if (result._tag === "Success" && result.value !== null) {
-      last = result.value;
+    const raw = tryParseJson(line);
+    if (typeof raw !== "object" || raw === null) continue;
+    const evt = raw as Record<string, unknown>;
+    const type = evt["type"];
+
+    if (type === "session") {
+      const id = stringOr(evt["id"]);
+      if (id) sessionId = id;
+    } else if (type === "message_end") {
+      const msg = evt["message"];
+      if (typeof msg !== "object" || msg === null) continue;
+      const m = msg as Record<string, unknown>;
+      if (m["role"] !== "assistant") continue;
+      const content = Array.isArray(m["content"]) ? (m["content"] as ReadonlyArray<unknown>) : [];
+      const text = extractText(content);
+      lastAssistantText = text;
+      lastAssistantMessage = text;
+      const sr = stringOr(m["stopReason"]);
+      if (sr) stopReason = sr;
+      const em = stringOr(m["errorMessage"]);
+      if (em) errorMessage = em;
+      const u = m["usage"];
+      if (typeof u === "object" && u !== null) {
+        const ur = u as Record<string, unknown>;
+        usageInput = numberOr(ur["input"]) ?? usageInput;
+        usageOutput = numberOr(ur["output"]) ?? usageOutput;
+        usageCost = numberOr(ur["cost"]) ?? usageCost;
+      }
+    } else if (type === "tool_execution_end") {
+      const name = stringOr(evt["toolName"]) ?? "";
+      const isError = evt["isError"] === true;
+      toolCalls.push({ name, ok: !isError });
+      lastToolCall = evt;
     }
   }
-  return last;
+
+  const usage: Usage = {};
+  if (usageInput !== undefined) (usage as { input: number }).input = usageInput;
+  if (usageOutput !== undefined) (usage as { output: number }).output = usageOutput;
+  if (usageCost !== undefined) (usage as { cost: number }).cost = usageCost;
+
+  return {
+    text: lastAssistantText,
+    sessionId,
+    usage,
+    toolCalls,
+    stopReason,
+    errorMessage,
+    lastAssistantMessage,
+    lastToolCall,
+  };
 };
 
 const lookupRegistry = (registry: typeof RegistryStore.Service, name: string) =>
@@ -129,6 +194,8 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
       return {
         invoke: (name, task) =>
           Effect.gen(function* () {
+            const invocationId = randomUUID();
+            const startedAt = Date.now();
             const entry = yield* lookupRegistry(registry, name);
             const binary = yield* runtime.ensureSlot(entry.piSlot);
             const profile = paths.agentProfile(agentRootOf(name));
@@ -161,12 +228,25 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
                 ),
               catch: (e) => new InvokeSpawnError({ binary, message: `spawn failed: ${String(e)}` }),
             });
-            const text = result.exitCode === 0 ? finalAssistantText(result.stdout) : "";
+            const agg = aggregate(result.stdout);
+            const text = result.exitCode === 0 ? agg.text : "";
+            const durationMs = Date.now() - startedAt;
             return {
               text,
               raw: result.stdout,
               stderr: result.stderr,
               exitCode: result.exitCode,
+              invocationId,
+              agent: entry.name,
+              version: entry.commitSha,
+              durationMs,
+              sessionId: agg.sessionId,
+              usage: agg.usage,
+              toolCalls: agg.toolCalls,
+              stopReason: agg.stopReason,
+              errorMessage: agg.errorMessage,
+              lastAssistantMessage: agg.lastAssistantMessage,
+              lastToolCall: agg.lastToolCall,
             } satisfies InvokeResult;
           }),
       } satisfies InvokerShape;
