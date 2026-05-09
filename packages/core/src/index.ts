@@ -16,3 +16,6 @@ export * from "./services/git-client.js";
 export * from "./services/npm-registry.js";
 export * from "./services/tar-extractor.js";
 export * from "./services/describe.js";
+export * from "./services/bun-installer.js";
+export * from "./services/runtime-slot.js";
+export * from "./services/invoker.js";

@@ -104,10 +104,14 @@ const buildBetaEntry = (
 };
 
 /**
- * Default Pi runtime slot label until slice #8 introduces the
- * RuntimeSlotManager. Tracked under `~/.pihub/runtime/pi/default/`.
+ * Default Pi runtime slot until slice #17 implements per-agent minor
+ * resolution from the agent's `package.json` deps. The label is the
+ * minor-version directory key under `~/.pihub/runtime/pi/<minor>/`.
+ *
+ * 0.74 is the current pi-coding-agent minor at the time of this slice; bump
+ * via `pihub upgrade-runtime` once that command lands (slice #17).
  */
-const DEFAULT_PI_SLOT = "default";
+const DEFAULT_PI_SLOT = "0.74";
 
 export class Installer extends Context.Tag("Installer")<Installer, InstallerShape>() {
   static readonly Live = Layer.effect(

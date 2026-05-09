@@ -111,3 +111,30 @@ export class AgentNotFoundError extends Schema.TaggedError<AgentNotFoundError>()
     message: Schema.String,
   },
 ) {}
+
+/** Pi runtime slot install or resolution failed. */
+export class RuntimeSlotError extends Schema.TaggedError<RuntimeSlotError>()("RuntimeSlotError", {
+  slot: Schema.String,
+  message: Schema.String,
+}) {}
+
+/** `bun install` invoked for a runtime slot returned non-zero. */
+export class BunInstallError extends Schema.TaggedError<BunInstallError>()("BunInstallError", {
+  cwd: Schema.String,
+  dep: Schema.String,
+  message: Schema.String,
+}) {}
+
+/** `pi` subprocess invocation failed before producing any output. */
+export class InvokeSpawnError extends Schema.TaggedError<InvokeSpawnError>()("InvokeSpawnError", {
+  binary: Schema.String,
+  message: Schema.String,
+}) {}
+
+/** `pi --mode json` produced output that did not parse as a JSONL event stream. */
+export class InvokeOutputError extends Schema.TaggedError<InvokeOutputError>()(
+  "InvokeOutputError",
+  {
+    message: Schema.String,
+  },
+) {}

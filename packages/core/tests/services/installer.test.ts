@@ -58,7 +58,7 @@ describe("Installer (happy path with fakes)", () => {
       expect(scout?.shape).toBe("beta");
       expect(scout?.invoke).toBe('pihub invoke sample-beta-agent:scout "<task>"');
       expect(scout?.description).toBe("fast codebase recon");
-      expect(scout?.piSlot).toBe("default");
+      expect(scout?.piSlot).toBe("0.74");
 
       const lockStore = yield* LockfileStore;
       const lock = yield* lockStore.read("sample-beta-agent");
@@ -141,7 +141,7 @@ describe("Installer (--frozen flag)", () => {
                   source: FIXTURE_PATH,
                   ref: "tree-old",
                   commitSha: "old-commit-sha",
-                  piSlot: "default",
+                  piSlot: "0.74",
                   depsLockSha: "",
                   installedAt: "2026-05-09T00:00:00.000Z",
                   link: false,
