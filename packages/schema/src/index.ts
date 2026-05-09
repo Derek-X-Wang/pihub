@@ -10,3 +10,4 @@ export * from "./invocation-envelope.js";
 export * from "./aliases.js";
 export * from "./log-meta.js";
 export * from "./pihub-config.js";
+export * from "./doctor-report.js";

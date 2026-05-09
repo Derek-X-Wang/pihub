@@ -6,6 +6,7 @@ import {
   BunInstaller,
   ConfigStore,
   Describe,
+  Doctor,
   EnvResolver,
   EnvStore,
   EphemeralRunner,
@@ -75,6 +76,7 @@ const AppLayer = Layer.mergeAll(
   Describe.Live,
   Remover.Live,
   Updater.Live,
+  Doctor.Live,
   InvokerLayers,
 ).pipe(Layer.provideMerge(Leaves));
 
