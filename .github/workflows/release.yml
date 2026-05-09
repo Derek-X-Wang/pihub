@@ -1,0 +1,91 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.short }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: bun-darwin-arm64
+            short: darwin-arm64
+            os: macos-latest
+          - target: bun-darwin-x64
+            short: darwin-x64
+            os: macos-latest
+          - target: bun-linux-x64
+            short: linux-x64
+            os: ubuntu-latest
+          - target: bun-linux-arm64
+            short: linux-arm64
+            os: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build single-binary for ${{ matrix.short }}
+        run: bun build apps/cli/src/cli.ts --compile --target=${{ matrix.target }} --outfile dist/pihub
+
+      - name: Package tarball + checksum
+        run: |
+          set -euo pipefail
+          cp LICENSE README.md dist/
+          cd dist
+          tar czf "../pihub-${{ matrix.short }}.tar.gz" pihub LICENSE README.md
+          cd ..
+          # `shasum -a 256` is portable across both ubuntu-latest (perl impl)
+          # and macos-latest (built-in). Avoid sha256sum for that reason.
+          shasum -a 256 "pihub-${{ matrix.short }}.tar.gz" > "pihub-${{ matrix.short }}.tar.gz.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pihub-${{ matrix.short }}
+          path: |
+            pihub-${{ matrix.short }}.tar.gz
+            pihub-${{ matrix.short }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          # `install.sh` is platform-agnostic; ship it alongside the binaries
+          # so the curl|bash flow keeps working when users pin a version.
+          files: |
+            artifacts/pihub-*.tar.gz
+            artifacts/pihub-*.tar.gz.sha256
+            install.sh
+          fail_on_unmatched_files: true
+          generate_release_notes: true
