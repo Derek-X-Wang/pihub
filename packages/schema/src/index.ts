@@ -6,3 +6,4 @@ export * from "./lockfile.js";
 export * from "./registry.js";
 export * from "./frontmatter.js";
 export * from "./agent-description.js";
+export * from "./invocation-envelope.js";

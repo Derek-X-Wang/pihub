@@ -194,4 +194,106 @@ describe("Invoker (live spawn against faux-pi shell script)", () => {
       expect(result.text).toBe("stream pass-through OK");
     }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
   );
+
+  it.effect("envelope aggregates: invocationId, durationMs, sessionId, usage, toolCalls", () =>
+    Effect.gen(function* () {
+      const profile = path.join(home, "agents", "sample-beta-agent", "profile");
+      const events = [
+        JSON.stringify({ type: "session", id: "session-xyz" }),
+        JSON.stringify({
+          type: "tool_execution_end",
+          toolCallId: "t1",
+          toolName: "bash",
+          result: {},
+          isError: false,
+        }),
+        JSON.stringify({
+          type: "tool_execution_end",
+          toolCallId: "t2",
+          toolName: "read",
+          result: {},
+          isError: true,
+        }),
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "all done" }],
+            stopReason: "stop",
+            usage: { input: 100, output: 50, cost: 0.001 },
+          },
+        }),
+      ];
+      yield* Effect.promise(() => writeFauxPi(path.join(home, "fakebin"), events, 0, profile));
+      const invoker = yield* Invoker;
+      const result = yield* invoker.invoke("sample-beta-agent:scout", "ping");
+      expect(result.exitCode).toBe(0);
+      expect(result.invocationId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(result.sessionId).toBe("session-xyz");
+      expect(result.usage).toEqual({ input: 100, output: 50, cost: 0.001 });
+      expect(result.toolCalls).toEqual([
+        { name: "bash", ok: true },
+        { name: "read", ok: false },
+      ]);
+      expect(result.stopReason).toBe("stop");
+      expect(result.durationMs).toBeGreaterThanOrEqual(0);
+    }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+  );
+
+  it.effect("error mapping: stopReason 'error' with no keyword → llm_error envelope", () =>
+    Effect.gen(function* () {
+      const profile = path.join(home, "agents", "sample-beta-agent", "profile");
+      const events = [
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "partial output" }],
+            stopReason: "error",
+            errorMessage: "model returned malformed response",
+          },
+        }),
+      ];
+      yield* Effect.promise(() => writeFauxPi(path.join(home, "fakebin"), events, 1, profile));
+      const invoker = yield* Invoker;
+      const result = yield* invoker.invoke("sample-beta-agent:scout", "ping");
+      expect(result.exitCode).toBe(1);
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toContain("malformed");
+      expect(result.lastAssistantMessage).toBe("partial output");
+    }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+  );
+
+  it.effect("error mapping: errorMessage with 'tool' keyword → tool_error envelope", () =>
+    Effect.gen(function* () {
+      const profile = path.join(home, "agents", "sample-beta-agent", "profile");
+      const events = [
+        JSON.stringify({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [],
+            stopReason: "error",
+            errorMessage: "tool execution failed",
+          },
+        }),
+      ];
+      yield* Effect.promise(() => writeFauxPi(path.join(home, "fakebin"), events, 1, profile));
+      const invoker = yield* Invoker;
+      const result = yield* invoker.invoke("sample-beta-agent:scout", "ping");
+      expect(result.stopReason).toBe("error");
+      expect(result.errorMessage).toContain("tool");
+    }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+  );
+
+  it.effect("runtime_error path: missing pi binary surfaces as InvokeSpawnError", () =>
+    Effect.gen(function* () {
+      const invoker = yield* Invoker;
+      const exit = yield* Effect.exit(invoker.invoke("sample-beta-agent:scout", "ping"));
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("InvokeSpawnError");
+    }).pipe(
+      Effect.provide(buildLayer(home, path.join(home, "does-not-exist", "pi"), [sampleEntry])),
+    ),
+  );
 });
