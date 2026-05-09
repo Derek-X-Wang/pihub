@@ -1,0 +1,25 @@
+# Bun / Node
+node_modules/
+*.log
+# Note: bun.lock (text lockfile) IS committed for reproducibility (see ADR-0009 lockfile policy when added).
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Editor
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# PiHub local state (just in case dev sessions leak this)
+.pihub/
