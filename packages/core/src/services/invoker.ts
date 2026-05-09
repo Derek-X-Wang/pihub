@@ -13,12 +13,14 @@ import {
   InvokeInvalidArgsError,
   InvokeOutputError,
   InvokeSpawnError,
+  LogStoreError,
   RegistryError,
   RuntimeSlotError,
 } from "../errors.js";
 import { Paths } from "../paths.js";
 import { AliasStore } from "./alias-store.js";
 import { EnvResolver } from "./env-resolver.js";
+import { DEFAULT_LOG_RETENTION, LogStore } from "./log-store.js";
 import { RegistryStore } from "./registry-store.js";
 import { RuntimeSlotManager } from "./runtime-slot.js";
 
@@ -60,7 +62,8 @@ export type InvokerError =
   | InvokeCwdNotFoundError
   | InvokeInvalidArgsError
   | EnvFileError
-  | AliasStoreError;
+  | AliasStoreError
+  | LogStoreError;
 
 export interface InvokeOptions {
   /** Override the cwd handed to pi. Mutually exclusive with `sandbox`. */
@@ -235,6 +238,7 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
       const paths = yield* Paths;
       const envResolver = yield* EnvResolver;
       const aliasStore = yield* AliasStore;
+      const logStore = yield* LogStore;
       return {
         invoke: (name, task, opts) =>
           Effect.gen(function* () {
@@ -387,6 +391,24 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
             const agg = aggregate(result.stdout);
             const text = result.exitCode === 0 ? agg.text : "";
             const durationMs = Date.now() - startedAt;
+
+            // Persist invocation log + ring-buffer prune. Failures here don't
+            // change the user-visible result — observability is best-effort.
+            yield* logStore
+              .record({
+                invocationId,
+                agent: entry.name,
+                startedAt: new Date(startedAt).toISOString(),
+                durationMs,
+                exitCode: result.exitCode,
+                firstPromptLine: task.split(/\r?\n/, 1)[0] ?? "",
+                raw: result.stdout,
+              })
+              .pipe(Effect.catchAll(() => Effect.void));
+            yield* logStore
+              .prune(entry.name, DEFAULT_LOG_RETENTION)
+              .pipe(Effect.catchAll(() => Effect.void));
+
             return {
               text,
               raw: result.stdout,

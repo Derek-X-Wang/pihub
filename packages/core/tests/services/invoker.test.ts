@@ -11,6 +11,7 @@ import { AliasStore } from "../../src/services/alias-store.js";
 import { EnvResolver } from "../../src/services/env-resolver.js";
 import type { InvokeOptions } from "../../src/services/invoker.js";
 import { Invoker } from "../../src/services/invoker.js";
+import { LogStore } from "../../src/services/log-store.js";
 import { RegistryStore } from "../../src/services/registry-store.js";
 import { RuntimeSlotManager } from "../../src/services/runtime-slot.js";
 
@@ -76,6 +77,7 @@ const buildLayer = (
         RuntimeSlotManager.Test(new Map([["0.74", binaryPath]])),
         EnvResolver.Test(resolverSeed),
         AliasStore.Test(aliasSeed),
+        LogStore.Test(),
       ),
     ),
   );

@@ -12,6 +12,7 @@ import {
   Installer,
   Invoker,
   LockfileStore,
+  LogStore,
   ManifestParser,
   NpmRegistry,
   Paths,
@@ -53,6 +54,7 @@ const Leaves = Layer.mergeAll(
   Profile.Live,
   LockfileStore.Live,
   RuntimeSlotManager.Live,
+  LogStore.Live,
   AliasLayers,
   EnvLayers,
 ).pipe(Layer.provideMerge(Base));

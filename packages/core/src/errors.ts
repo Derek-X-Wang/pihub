@@ -198,3 +198,14 @@ export class AliasNotFoundError extends Schema.TaggedError<AliasNotFoundError>()
     message: Schema.String,
   },
 ) {}
+
+/** LogStore I/O failed (write/read/prune/scan). */
+export class LogStoreError extends Schema.TaggedError<LogStoreError>()("LogStoreError", {
+  message: Schema.String,
+}) {}
+
+/** `pihub logs --invocation-id <id>` referenced an id that doesn't exist on disk. */
+export class LogNotFoundError extends Schema.TaggedError<LogNotFoundError>()("LogNotFoundError", {
+  invocationId: Schema.String,
+  message: Schema.String,
+}) {}

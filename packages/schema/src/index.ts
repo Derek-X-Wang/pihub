@@ -8,3 +8,4 @@ export * from "./frontmatter.js";
 export * from "./agent-description.js";
 export * from "./invocation-envelope.js";
 export * from "./aliases.js";
+export * from "./log-meta.js";
