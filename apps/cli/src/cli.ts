@@ -7,17 +7,26 @@ import {
   Installer,
   LockfileStore,
   ManifestParser,
+  NpmRegistry,
   Paths,
   Profile,
   RegistryStore,
   ShapeDetector,
   SourceFetcher,
+  TarExtractor,
 } from "@pihub/core";
 import { Effect, Layer } from "effect";
 import { rootCommand } from "./commands.js";
 import { CLI_VERSION } from "./version.js";
 
-const Base = Layer.mergeAll(Paths.Live, BunContext.layer, GithubApi.Live, GitClient.Live);
+const Base = Layer.mergeAll(
+  Paths.Live,
+  BunContext.layer,
+  GithubApi.Live,
+  GitClient.Live,
+  NpmRegistry.Live,
+  TarExtractor.Live,
+);
 
 const Leaves = Layer.mergeAll(
   ShapeDetector.Live,

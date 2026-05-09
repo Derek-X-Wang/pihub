@@ -6,11 +6,13 @@ import {
   Installer,
   LockfileStore,
   ManifestParser,
+  NpmRegistry,
   Paths,
   Profile,
   RegistryStore,
   ShapeDetector,
   SourceFetcher,
+  TarExtractor,
 } from "@pihub/core";
 import { Effect, Layer } from "effect";
 import * as fsp from "node:fs/promises";
@@ -28,6 +30,8 @@ const buildLiveLayer = (homeDir: string) => {
     BunContext.layer,
     GithubApi.Test(),
     GitClient.Test(),
+    NpmRegistry.Test(),
+    TarExtractor.Test(),
   );
   const Leaves = Layer.mergeAll(
     ShapeDetector.Live,

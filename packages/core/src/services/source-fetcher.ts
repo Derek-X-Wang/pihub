@@ -6,6 +6,7 @@ import {
   CopyError,
   GitCloneError,
   GithubApiError,
+  NpmVersionNotFoundError,
   RefNotFoundError,
   SourceFetchError,
   SourceNotFoundError,
@@ -19,6 +20,8 @@ import {
 import type { SourceInfo } from "../types.js";
 import { GithubApi } from "./github-api.js";
 import { GitClient } from "./git-client.js";
+import { NpmRegistry } from "./npm-registry.js";
+import { TarExtractor } from "./tar-extractor.js";
 
 export type SourceFetcherError =
   | SourceNotFoundError
@@ -26,7 +29,8 @@ export type SourceFetcherError =
   | CopyError
   | GithubApiError
   | RefNotFoundError
-  | GitCloneError;
+  | GitCloneError
+  | NpmVersionNotFoundError;
 
 export interface SourceFetcherShape {
   readonly fetch: (source: string, dest: string) => Effect.Effect<SourceInfo, SourceFetcherError>;
@@ -242,6 +246,39 @@ const fetchGithub = (
     };
   });
 
+const fetchNpm = (
+  fs: FileSystem.FileSystem,
+  registry: typeof NpmRegistry.Service,
+  tar: typeof TarExtractor.Service,
+  parsed: Extract<ParsedSource, { kind: "npm" }>,
+  dest: string,
+): Effect.Effect<SourceInfo, SourceFetchError | CopyError | NpmVersionNotFoundError> =>
+  Effect.gen(function* () {
+    const version = parsed.version ?? (yield* registry.resolveLatest(parsed.packageName));
+    const tarball = yield* registry.downloadTarball(parsed.packageName, version);
+    yield* fs.remove(dest, { recursive: true, force: true }).pipe(Effect.ignore);
+    yield* fs.makeDirectory(dest, { recursive: true }).pipe(
+      Effect.mapError(
+        (e) =>
+          new SourceFetchError({
+            source: parsed.normalized,
+            message: `failed to mkdir ${dest}: ${String(e)}`,
+          }),
+      ),
+    );
+    yield* tar.extract(tarball.bytes, dest, 1);
+    const depsLockSha = yield* lockfileSha(fs, dest);
+    return {
+      source: `npm:${parsed.packageName}${parsed.version ? `@${parsed.version}` : ""}`,
+      ref: version,
+      // npm has no commit SHA — the registry-resolved version IS the identity.
+      // We mirror it into commitSha so the existing Lockfile schema doesn't grow
+      // a per-kind field; idempotency comparisons still work source-by-source.
+      commitSha: version,
+      depsLockSha,
+    };
+  });
+
 export class SourceFetcher extends Context.Tag("SourceFetcher")<
   SourceFetcher,
   SourceFetcherShape
@@ -252,6 +289,8 @@ export class SourceFetcher extends Context.Tag("SourceFetcher")<
       const fs = yield* FileSystem.FileSystem;
       const api = yield* GithubApi;
       const git = yield* GitClient;
+      const registry = yield* NpmRegistry;
+      const tar = yield* TarExtractor;
       return SourceFetcher.of({
         fetch: (source, dest) =>
           Effect.gen(function* () {
@@ -261,12 +300,13 @@ export class SourceFetcher extends Context.Tag("SourceFetcher")<
                 new SourceNotFoundError({
                   source,
                   message:
-                    "unrecognised source — supported kinds: github:owner/repo[@ref], https://github.com/owner/repo[@ref], local path",
+                    "unrecognised source — supported kinds: github:owner/repo[@ref], https://github.com/owner/repo[@ref], npm:[@scope/]pkg[@version], local path",
                 }),
               );
             }
             if (parsed.kind === "local") return yield* fetchLocal(fs, parsed, source, dest);
-            return yield* fetchGithub(fs, api, git, parsed, dest);
+            if (parsed.kind === "github") return yield* fetchGithub(fs, api, git, parsed, dest);
+            return yield* fetchNpm(fs, registry, tar, parsed, dest);
           }),
       });
     }),

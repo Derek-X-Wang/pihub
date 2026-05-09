@@ -70,10 +70,46 @@ describe("parseSource", () => {
   });
 
   it("returns null for unrecognised inputs", () => {
-    expect(parseSource("npm:@scope/pkg")).toBeNull();
     expect(parseSource("git@github.com:owner/repo")).toBeNull();
     expect(parseSource("")).toBeNull();
     expect(parseSource("just-a-name")).toBeNull();
+    expect(parseSource("npm:")).toBeNull();
+  });
+
+  it("parses npm shorthand without version", () => {
+    expect(parseSource("npm:tiny")).toEqual({
+      kind: "npm",
+      packageName: "tiny",
+      version: undefined,
+      normalized: "npm:tiny",
+    });
+  });
+
+  it("parses npm scoped package without version", () => {
+    expect(parseSource("npm:@scope/pkg")).toEqual({
+      kind: "npm",
+      packageName: "@scope/pkg",
+      version: undefined,
+      normalized: "npm:@scope/pkg",
+    });
+  });
+
+  it("parses npm with explicit version", () => {
+    expect(parseSource("npm:pkg@1.2.3")).toMatchObject({
+      kind: "npm",
+      packageName: "pkg",
+      version: "1.2.3",
+      normalized: "npm:pkg@1.2.3",
+    });
+  });
+
+  it("parses npm scoped + version, preserving the scope `@`", () => {
+    expect(parseSource("npm:@mariozechner/pi-coding-agent@0.74.1")).toMatchObject({
+      kind: "npm",
+      packageName: "@mariozechner/pi-coding-agent",
+      version: "0.74.1",
+      normalized: "npm:@mariozechner/pi-coding-agent@0.74.1",
+    });
   });
 });
 
