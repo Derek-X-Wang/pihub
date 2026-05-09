@@ -209,3 +209,17 @@ export class LogNotFoundError extends Schema.TaggedError<LogNotFoundError>()("Lo
   invocationId: Schema.String,
   message: Schema.String,
 }) {}
+
+/** `~/.pihub/config.json` failed to read or write. */
+export class ConfigStoreError extends Schema.TaggedError<ConfigStoreError>()("ConfigStoreError", {
+  message: Schema.String,
+}) {}
+
+/** `pihub config set` got an unknown key or a value that fails validation. */
+export class ConfigInvalidError extends Schema.TaggedError<ConfigInvalidError>()(
+  "ConfigInvalidError",
+  {
+    key: Schema.String,
+    message: Schema.String,
+  },
+) {}

@@ -28,4 +28,5 @@ export * from "./services/log-store.js";
 export * from "./services/ephemeral-runner.js";
 export * from "./services/remover.js";
 export * from "./services/updater.js";
+export * from "./services/config-store.js";
 export * from "./lib/dotenv.js";
