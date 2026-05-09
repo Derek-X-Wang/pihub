@@ -4,6 +4,7 @@ import { BunContext, BunRuntime } from "@effect/platform-bun";
 import {
   AliasStore,
   BunInstaller,
+  ConfigStore,
   Describe,
   EnvResolver,
   EnvStore,
@@ -60,6 +61,7 @@ const Leaves = Layer.mergeAll(
   Profile.Live,
   LockfileStore.Live,
   LogStore.Live,
+  ConfigStore.Live,
   RegistryLayers,
   EnvLayers,
 ).pipe(Layer.provideMerge(Base));

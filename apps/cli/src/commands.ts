@@ -1,5 +1,6 @@
 import { Command } from "@effect/cli";
 import { aliasCommand } from "./commands/alias.js";
+import { configCommand } from "./commands/config.js";
 import { describeCommand } from "./commands/describe.js";
 import { envCommand } from "./commands/env.js";
 import { gcLogsCommand } from "./commands/gc-logs.js";
@@ -30,5 +31,6 @@ export const rootCommand = Command.make("pihub").pipe(
     gcLogsCommand,
     runtimeCommand,
     gcRuntimeCommand,
+    configCommand,
   ]),
 );
