@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    name: lint + typecheck + test + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Format check
+        run: bunx prettier --check .
+
+      - name: Lint
+        run: bunx oxlint
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Test
+        run: bunx vitest run
+
+      - name: Build CLI binary
+        run: bun build apps/cli/src/cli.ts --compile --outfile dist/pihub
+
+      - name: Smoke test compiled binary
+        run: ./dist/pihub --version

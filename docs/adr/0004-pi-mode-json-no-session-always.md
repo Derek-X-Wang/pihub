@@ -1,6 +1,6 @@
 # Always spawn `pi --mode json --no-session`
 
-PiHub always spawns the underlying pi process with `--mode json --no-session`, regardless of which output mode the caller asked for. The default text output, the `--stream` JSONL pass-through, and the `--envelope` aggregated form are all *projections* over the same captured event stream. PiHub itself owns log capture, output projection, and timeout/abort wiring.
+PiHub always spawns the underlying pi process with `--mode json --no-session`, regardless of which output mode the caller asked for. The default text output, the `--stream` JSONL pass-through, and the `--envelope` aggregated form are all _projections_ over the same captured event stream. PiHub itself owns log capture, output projection, and timeout/abort wiring.
 
 ## Considered Options
 
