@@ -13,6 +13,9 @@ export type Shape = typeof Shape.Type;
  *
  * `linked === true` means the agent's repo dir is a symlink (slice #6
  * `--link` mode); the registry/list surface marks linked agents distinctly.
+ *
+ * `permissions` is the manifest's advisory permission list — recorded only
+ * in v1 (not enforced) per CONTEXT.md.
  */
 export const RegistryEntry = Schema.Struct({
   name: Schema.String,
@@ -25,6 +28,7 @@ export const RegistryEntry = Schema.Struct({
   invoke: Schema.String,
   envDeclared: Schema.Array(Schema.String),
   linked: Schema.optionalWith(Schema.Boolean, { default: () => false }),
+  permissions: Schema.optionalWith(Schema.Array(Schema.String), { default: () => [] }),
 });
 export type RegistryEntry = typeof RegistryEntry.Type;
 

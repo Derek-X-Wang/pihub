@@ -94,9 +94,11 @@ describe("@pihub/schema", () => {
       invoke: 'pihub invoke sample-beta-agent:scout "<task>"',
       envDeclared: [],
       linked: false,
+      permissions: [],
     };
     const decoded = Effect.runSync(Schema.decodeUnknown(RegistryEntry)(entry));
     expect(decoded.shape).toBe("beta");
+    expect(decoded.permissions).toEqual([]);
   });
 
   it("BetaAgentFrontmatter accepts both string and array tools", () => {

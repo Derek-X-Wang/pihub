@@ -1,13 +1,22 @@
-import { Command } from "@effect/cli";
+import { Command, Options } from "@effect/cli";
 import { RegistryStore } from "@pihub/core";
 import { Console, Effect } from "effect";
 
 const padRight = (s: string, n: number) => (s.length >= n ? s : s + " ".repeat(n - s.length));
 
-export const listCommand = Command.make("list", {}, () =>
+const jsonFlag = Options.boolean("json").pipe(
+  Options.withDescription("Emit the registry as JSON matching the @pihub/schema Registry shape"),
+);
+
+export const listCommand = Command.make("list", { json: jsonFlag }, ({ json }) =>
   Effect.gen(function* () {
     const registry = yield* RegistryStore;
     const reg = yield* registry.read;
+
+    if (json) {
+      yield* Console.log(JSON.stringify(reg, null, 2));
+      return;
+    }
 
     if (reg.agents.length === 0) {
       yield* Console.log("No agents installed. Run `pihub install <path>` first.");

@@ -15,3 +15,4 @@ export * from "./services/github-api.js";
 export * from "./services/git-client.js";
 export * from "./services/npm-registry.js";
 export * from "./services/tar-extractor.js";
+export * from "./services/describe.js";
