@@ -2,6 +2,8 @@
 import { Command } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
 import {
+  GitClient,
+  GithubApi,
   Installer,
   LockfileStore,
   ManifestParser,
@@ -15,7 +17,7 @@ import { Effect, Layer } from "effect";
 import { rootCommand } from "./commands.js";
 import { CLI_VERSION } from "./version.js";
 
-const Base = Layer.mergeAll(Paths.Live, BunContext.layer);
+const Base = Layer.mergeAll(Paths.Live, BunContext.layer, GithubApi.Live, GitClient.Live);
 
 const Leaves = Layer.mergeAll(
   ShapeDetector.Live,

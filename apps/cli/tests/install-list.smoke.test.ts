@@ -1,6 +1,8 @@
 import { it } from "@effect/vitest";
 import { BunContext } from "@effect/platform-bun";
 import {
+  GitClient,
+  GithubApi,
   Installer,
   LockfileStore,
   ManifestParser,
@@ -21,7 +23,12 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(HERE, "..", "test", "fixtures", "sample-beta-agent");
 
 const buildLiveLayer = (homeDir: string) => {
-  const Base = Layer.mergeAll(Paths.Test(homeDir), BunContext.layer);
+  const Base = Layer.mergeAll(
+    Paths.Test(homeDir),
+    BunContext.layer,
+    GithubApi.Test(),
+    GitClient.Test(),
+  );
   const Leaves = Layer.mergeAll(
     ShapeDetector.Live,
     ManifestParser.Live,

@@ -2,21 +2,34 @@ import { FileSystem } from "@effect/platform";
 import { Context, Effect, Layer, Ref } from "effect";
 import { createHash } from "node:crypto";
 import * as path from "node:path";
-import { CopyError, SourceNotFoundError } from "../errors.js";
+import {
+  CopyError,
+  GitCloneError,
+  GithubApiError,
+  RefNotFoundError,
+  SourceFetchError,
+  SourceNotFoundError,
+} from "../errors.js";
+import {
+  isCommitSha,
+  parseSource,
+  pickHighestSemverTag,
+  type ParsedSource,
+} from "../lib/parse-source.js";
 import type { SourceInfo } from "../types.js";
+import { GithubApi } from "./github-api.js";
+import { GitClient } from "./git-client.js";
 
-/**
- * Slice #3 supports only local paths. Remote URL kinds (`github:`, `https://`,
- * `npm:`, …) come in slices #4 and #5 — see CONTEXT.md "Source URL kinds".
- */
-const isLocalPath = (source: string): boolean =>
-  source.startsWith("./") || source.startsWith("../") || path.isAbsolute(source) || source === ".";
+export type SourceFetcherError =
+  | SourceNotFoundError
+  | SourceFetchError
+  | CopyError
+  | GithubApiError
+  | RefNotFoundError
+  | GitCloneError;
 
 export interface SourceFetcherShape {
-  readonly fetch: (
-    source: string,
-    dest: string,
-  ) => Effect.Effect<SourceInfo, SourceNotFoundError | CopyError>;
+  readonly fetch: (source: string, dest: string) => Effect.Effect<SourceInfo, SourceFetcherError>;
 }
 
 const walkAndHash = (fs: FileSystem.FileSystem, root: string): Effect.Effect<string, CopyError> =>
@@ -153,6 +166,82 @@ const lockfileSha = (
     return "";
   });
 
+const fetchLocal = (
+  fs: FileSystem.FileSystem,
+  parsed: Extract<ParsedSource, { kind: "local" }>,
+  rawSource: string,
+  dest: string,
+): Effect.Effect<SourceInfo, SourceNotFoundError | CopyError> =>
+  Effect.gen(function* () {
+    const exists = yield* fs.exists(parsed.absolutePath).pipe(Effect.orElseSucceed(() => false));
+    if (!exists) {
+      return yield* Effect.fail(
+        new SourceNotFoundError({
+          source: rawSource,
+          message: `local path does not exist: ${parsed.absolutePath}`,
+        }),
+      );
+    }
+    yield* fs.remove(dest, { recursive: true, force: true }).pipe(Effect.ignore);
+    yield* copyTree(fs, parsed.absolutePath, dest);
+    const commitSha = yield* walkAndHash(fs, dest);
+    const depsLockSha = yield* lockfileSha(fs, dest);
+    return {
+      source: parsed.absolutePath,
+      ref: `tree-${commitSha.slice(0, 12)}`,
+      commitSha,
+      depsLockSha,
+    };
+  });
+
+const resolveDefaultRef = (
+  api: typeof GithubApi.Service,
+  owner: string,
+  repo: string,
+): Effect.Effect<string, GithubApiError | RefNotFoundError> =>
+  Effect.gen(function* () {
+    const tags = yield* api.listTags(owner, repo);
+    const semver = pickHighestSemverTag(tags);
+    if (semver) return semver;
+    return yield* api.getDefaultBranch(owner, repo);
+  });
+
+const fetchGithub = (
+  fs: FileSystem.FileSystem,
+  api: typeof GithubApi.Service,
+  git: typeof GitClient.Service,
+  parsed: Extract<ParsedSource, { kind: "github" }>,
+  dest: string,
+): Effect.Effect<
+  SourceInfo,
+  SourceFetchError | CopyError | GithubApiError | RefNotFoundError | GitCloneError
+> =>
+  Effect.gen(function* () {
+    const requestedRef = parsed.ref ?? (yield* resolveDefaultRef(api, parsed.owner, parsed.repo));
+    const commitSha = isCommitSha(requestedRef)
+      ? requestedRef
+      : yield* api.resolveCommitSha(parsed.owner, parsed.repo, requestedRef);
+    const cloneUrl = `https://github.com/${parsed.owner}/${parsed.repo}.git`;
+    yield* fs.remove(dest, { recursive: true, force: true }).pipe(Effect.ignore);
+    yield* fs.makeDirectory(path.dirname(dest), { recursive: true }).pipe(
+      Effect.mapError(
+        (e) =>
+          new SourceFetchError({
+            source: parsed.normalized,
+            message: `failed to mkdir parent of ${dest}: ${String(e)}`,
+          }),
+      ),
+    );
+    yield* git.clone(cloneUrl, dest, commitSha);
+    const depsLockSha = yield* lockfileSha(fs, dest);
+    return {
+      source: parsed.normalized,
+      ref: requestedRef,
+      commitSha,
+      depsLockSha,
+    };
+  });
+
 export class SourceFetcher extends Context.Tag("SourceFetcher")<
   SourceFetcher,
   SourceFetcherShape
@@ -161,46 +250,32 @@ export class SourceFetcher extends Context.Tag("SourceFetcher")<
     SourceFetcher,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      const api = yield* GithubApi;
+      const git = yield* GitClient;
       return SourceFetcher.of({
         fetch: (source, dest) =>
           Effect.gen(function* () {
-            if (!isLocalPath(source)) {
+            const parsed = parseSource(source);
+            if (!parsed) {
               return yield* Effect.fail(
                 new SourceNotFoundError({
                   source,
-                  message: `slice #3 supports only local paths; remote URL kinds land in slices #4 and #5`,
+                  message:
+                    "unrecognised source — supported kinds: github:owner/repo[@ref], https://github.com/owner/repo[@ref], local path",
                 }),
               );
             }
-            const absSource = path.resolve(source);
-            const exists = yield* fs.exists(absSource).pipe(Effect.orElseSucceed(() => false));
-            if (!exists) {
-              return yield* Effect.fail(
-                new SourceNotFoundError({
-                  source,
-                  message: `local path does not exist: ${absSource}`,
-                }),
-              );
-            }
-            // Wipe destination so the copy is a true mirror — avoids stale files.
-            yield* fs.remove(dest, { recursive: true, force: true }).pipe(Effect.ignore);
-            yield* copyTree(fs, absSource, dest);
-            const commitSha = yield* walkAndHash(fs, dest);
-            const depsLockSha = yield* lockfileSha(fs, dest);
-            return {
-              source: absSource,
-              ref: `tree-${commitSha.slice(0, 12)}`,
-              commitSha,
-              depsLockSha,
-            };
+            if (parsed.kind === "local") return yield* fetchLocal(fs, parsed, source, dest);
+            return yield* fetchGithub(fs, api, git, parsed, dest);
           }),
       });
     }),
   );
 
   /**
-   * Test layer that records every call and returns canned info. The recorder
-   * Ref is exposed via `accessRecorder` so tests can assert call patterns.
+   * Test layer that records every call and returns canned info. Default
+   * fallback if a source is not seeded: a synthetic SourceInfo so the test
+   * exercises the orchestration without coupling to the URL parser.
    */
   static readonly Test = (seed: ReadonlyMap<string, SourceInfo> = new Map()) =>
     Layer.effect(
