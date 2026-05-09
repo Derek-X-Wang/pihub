@@ -296,4 +296,130 @@ describe("Invoker (live spawn against faux-pi shell script)", () => {
       Effect.provide(buildLayer(home, path.join(home, "does-not-exist", "pi"), [sampleEntry])),
     ),
   );
+
+  it.effect("--cwd: pi inherits the supplied cwd", () =>
+    Effect.gen(function* () {
+      const profile = path.join(home, "agents", "sample-beta-agent", "profile");
+      const cwdPath = path.join(home, "explicit-cwd");
+      yield* Effect.promise(() => fsp.mkdir(cwdPath, { recursive: true }));
+      // Faux-pi prints its own pwd as a side-channel so the test can verify.
+      const binDir = path.join(home, "fakebin");
+      const pi = path.join(binDir, "pi");
+      yield* Effect.promise(async () => {
+        await fsp.mkdir(binDir, { recursive: true });
+        await fsp.writeFile(
+          pi,
+          [
+            "#!/usr/bin/env bash",
+            `if [ "$PI_CODING_AGENT_DIR" != "${profile}" ]; then exit 99; fi`,
+            'printf "%s\\n" "{\\"type\\":\\"cwd-marker\\",\\"cwd\\":\\"$(pwd)\\"}"',
+            'printf "%s\\n" "{\\"type\\":\\"message_end\\",\\"message\\":{\\"role\\":\\"assistant\\",\\"content\\":[{\\"type\\":\\"text\\",\\"text\\":\\"ok\\"}]}}"',
+            "exit 0",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+      });
+      const realCwdPath = yield* Effect.promise(() => fsp.realpath(cwdPath));
+      const invoker = yield* Invoker;
+      const result = yield* invoker.invoke("sample-beta-agent:scout", "ping", { cwd: cwdPath });
+      expect(result.exitCode).toBe(0);
+      // macOS symlinks /var → /private/var; compare resolved real paths.
+      expect(result.raw).toContain(`"cwd":"${realCwdPath}"`);
+    }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+  );
+
+  it.effect("--cwd: non-existent path → InvokeCwdNotFoundError", () =>
+    Effect.gen(function* () {
+      const invoker = yield* Invoker;
+      const exit = yield* Effect.exit(
+        invoker.invoke("sample-beta-agent:scout", "ping", { cwd: "/nope/does-not-exist" }),
+      );
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("InvokeCwdNotFoundError");
+    }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+  );
+
+  it.effect("--cwd + --sandbox together → InvokeInvalidArgsError", () =>
+    Effect.gen(function* () {
+      const invoker = yield* Invoker;
+      const exit = yield* Effect.exit(
+        invoker.invoke("sample-beta-agent:scout", "ping", { cwd: "/tmp", sandbox: true }),
+      );
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("InvokeInvalidArgsError");
+    }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+  );
+
+  it.effect("--sandbox: tempdir created under tmpdir; removed after exit", () =>
+    Effect.gen(function* () {
+      const profile = path.join(home, "agents", "sample-beta-agent", "profile");
+      // Faux-pi captures its cwd so the test can later verify it doesn't survive.
+      const binDir = path.join(home, "fakebin");
+      const pi = path.join(binDir, "pi");
+      yield* Effect.promise(async () => {
+        await fsp.mkdir(binDir, { recursive: true });
+        await fsp.writeFile(
+          pi,
+          [
+            "#!/usr/bin/env bash",
+            `if [ "$PI_CODING_AGENT_DIR" != "${profile}" ]; then exit 99; fi`,
+            'printf "%s\\n" "{\\"type\\":\\"cwd-marker\\",\\"cwd\\":\\"$(pwd)\\"}"',
+            'printf "%s\\n" "{\\"type\\":\\"message_end\\",\\"message\\":{\\"role\\":\\"assistant\\",\\"content\\":[{\\"type\\":\\"text\\",\\"text\\":\\"ok\\"}]}}"',
+            "exit 0",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+      });
+      const invoker = yield* Invoker;
+      const result = yield* invoker.invoke("sample-beta-agent:scout", "ping", { sandbox: true });
+      expect(result.exitCode).toBe(0);
+      // Pull the recorded cwd back out of the JSONL marker line.
+      const match = result.raw.match(/"cwd":"([^"]+)"/);
+      expect(match).not.toBeNull();
+      const sandboxCwd = match?.[1] as string;
+      expect(sandboxCwd).toContain("pihub-sandbox-");
+      // After the invocation completes, the tempdir is gone.
+      const stillExists = yield* Effect.promise(() =>
+        fsp
+          .stat(sandboxCwd)
+          .then(() => true)
+          .catch(() => false),
+      );
+      expect(stillExists).toBe(false);
+    }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+  );
+
+  it.effect("--sandbox: tempdir cleanup runs even when pi exits non-zero", () =>
+    Effect.gen(function* () {
+      const profile = path.join(home, "agents", "sample-beta-agent", "profile");
+      const binDir = path.join(home, "fakebin");
+      const pi = path.join(binDir, "pi");
+      yield* Effect.promise(async () => {
+        await fsp.mkdir(binDir, { recursive: true });
+        await fsp.writeFile(
+          pi,
+          [
+            "#!/usr/bin/env bash",
+            `if [ "$PI_CODING_AGENT_DIR" != "${profile}" ]; then exit 99; fi`,
+            'printf "%s\\n" "{\\"type\\":\\"cwd-marker\\",\\"cwd\\":\\"$(pwd)\\"}"',
+            "exit 1",
+          ].join("\n"),
+          { mode: 0o755 },
+        );
+      });
+      const invoker = yield* Invoker;
+      const result = yield* invoker.invoke("sample-beta-agent:scout", "ping", { sandbox: true });
+      expect(result.exitCode).toBe(1);
+      const match = result.raw.match(/"cwd":"([^"]+)"/);
+      expect(match).not.toBeNull();
+      const sandboxCwd = match?.[1] as string;
+      const stillExists = yield* Effect.promise(() =>
+        fsp
+          .stat(sandboxCwd)
+          .then(() => true)
+          .catch(() => false),
+      );
+      expect(stillExists).toBe(false);
+    }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+  );
 });

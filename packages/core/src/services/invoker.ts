@@ -1,10 +1,14 @@
 import { ToolCallSummary, Usage } from "@pihub/schema";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import * as fsp from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { Context, Effect, Layer, Schema } from "effect";
 import {
   AgentNotFoundError,
+  InvokeCwdNotFoundError,
+  InvokeInvalidArgsError,
   InvokeOutputError,
   InvokeSpawnError,
   RegistryError,
@@ -44,10 +48,23 @@ export type InvokerError =
   | RegistryError
   | RuntimeSlotError
   | InvokeSpawnError
-  | InvokeOutputError;
+  | InvokeOutputError
+  | InvokeCwdNotFoundError
+  | InvokeInvalidArgsError;
+
+export interface InvokeOptions {
+  /** Override the cwd handed to pi. Mutually exclusive with `sandbox`. */
+  readonly cwd?: string;
+  /** Spawn pi in a fresh tempdir; remove it on exit. Mutually exclusive with `cwd`. */
+  readonly sandbox?: boolean;
+}
 
 export interface InvokerShape {
-  readonly invoke: (agentName: string, task: string) => Effect.Effect<InvokeResult, InvokerError>;
+  readonly invoke: (
+    agentName: string,
+    task: string,
+    opts?: InvokeOptions,
+  ) => Effect.Effect<InvokeResult, InvokerError>;
 }
 
 /** Minimal slice of pi's TextContent block. */
@@ -192,10 +209,41 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
       const runtime = yield* RuntimeSlotManager;
       const paths = yield* Paths;
       return {
-        invoke: (name, task) =>
+        invoke: (name, task, opts) =>
           Effect.gen(function* () {
             const invocationId = randomUUID();
             const startedAt = Date.now();
+
+            // Validate flag combination first — invalid input must short-circuit.
+            if (opts?.cwd !== undefined && opts?.sandbox === true) {
+              return yield* Effect.fail(
+                new InvokeInvalidArgsError({
+                  message: "--cwd and --sandbox are mutually exclusive",
+                }),
+              );
+            }
+
+            // If --cwd: assert path exists. The fs.access throw maps to a
+            // tagged error with exit-2 semantics in the CLI.
+            if (opts?.cwd !== undefined) {
+              const exists = yield* Effect.tryPromise({
+                try: () =>
+                  fsp
+                    .stat(opts.cwd as string)
+                    .then((s) => s.isDirectory())
+                    .catch(() => false),
+                catch: () => false,
+              }).pipe(Effect.orElseSucceed(() => false));
+              if (!exists) {
+                return yield* Effect.fail(
+                  new InvokeCwdNotFoundError({
+                    cwd: opts.cwd,
+                    message: `--cwd path does not exist or is not a directory: ${opts.cwd}`,
+                  }),
+                );
+              }
+            }
+
             const entry = yield* lookupRegistry(registry, name);
             const binary = yield* runtime.ensureSlot(entry.piSlot);
             const profile = paths.agentProfile(agentRootOf(name));
@@ -204,30 +252,57 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
               PI_CODING_AGENT_DIR: profile,
               PI_PACKAGE_DIR: path.join(profile, "packages"),
             };
-            const result = yield* Effect.tryPromise({
-              try: () =>
-                new Promise<{ stdout: string; stderr: string; exitCode: number }>(
-                  (resolve, reject) => {
-                    const child = spawn(binary, ["--mode", "json", "--no-session", "-p", task], {
-                      env,
-                      stdio: ["ignore", "pipe", "pipe"],
-                    });
-                    const stdoutChunks: Buffer[] = [];
-                    const stderrChunks: Buffer[] = [];
-                    child.stdout.on("data", (b: Buffer) => stdoutChunks.push(b));
-                    child.stderr.on("data", (b: Buffer) => stderrChunks.push(b));
-                    child.on("error", reject);
-                    child.on("close", (code) =>
-                      resolve({
-                        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-                        stderr: Buffer.concat(stderrChunks).toString("utf8"),
-                        exitCode: code ?? 1,
+
+            // Sandbox mode: acquire-release temp dir. Cleanup is wired to the
+            // Effect scope so it runs on success, failure, and interruption.
+            const cwdResource = opts?.sandbox
+              ? Effect.acquireRelease(
+                  Effect.tryPromise({
+                    try: () => fsp.mkdtemp(path.join(os.tmpdir(), "pihub-sandbox-")),
+                    catch: (e) =>
+                      new InvokeSpawnError({
+                        binary,
+                        message: `failed to create sandbox tempdir: ${String(e)}`,
                       }),
-                    );
-                  },
-                ),
-              catch: (e) => new InvokeSpawnError({ binary, message: `spawn failed: ${String(e)}` }),
-            });
+                  }),
+                  (dir) =>
+                    Effect.promise(() => fsp.rm(dir, { recursive: true, force: true })).pipe(
+                      Effect.ignore,
+                    ),
+                )
+              : Effect.succeed(opts?.cwd ?? process.cwd());
+
+            const result = yield* Effect.scoped(
+              Effect.gen(function* () {
+                const cwd = yield* cwdResource;
+                return yield* Effect.tryPromise({
+                  try: () =>
+                    new Promise<{ stdout: string; stderr: string; exitCode: number }>(
+                      (resolve, reject) => {
+                        const child = spawn(
+                          binary,
+                          ["--mode", "json", "--no-session", "-p", task],
+                          { env, cwd, stdio: ["ignore", "pipe", "pipe"] },
+                        );
+                        const stdoutChunks: Buffer[] = [];
+                        const stderrChunks: Buffer[] = [];
+                        child.stdout.on("data", (b: Buffer) => stdoutChunks.push(b));
+                        child.stderr.on("data", (b: Buffer) => stderrChunks.push(b));
+                        child.on("error", reject);
+                        child.on("close", (code) =>
+                          resolve({
+                            stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+                            stderr: Buffer.concat(stderrChunks).toString("utf8"),
+                            exitCode: code ?? 1,
+                          }),
+                        );
+                      },
+                    ),
+                  catch: (e) =>
+                    new InvokeSpawnError({ binary, message: `spawn failed: ${String(e)}` }),
+                });
+              }),
+            );
             const agg = aggregate(result.stdout);
             const text = result.exitCode === 0 ? agg.text : "";
             const durationMs = Date.now() - startedAt;

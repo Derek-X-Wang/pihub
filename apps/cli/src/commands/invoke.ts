@@ -4,8 +4,9 @@ import {
   buildSuccessEnvelope,
   Invoker,
   mapStopReasonToCode,
+  type InvokeOptions,
 } from "@pihub/core";
-import { Console, Effect } from "effect";
+import { Console, Effect, Option } from "effect";
 
 const nameArg = Args.text({ name: "agent" }).pipe(
   Args.withDescription("Canonical agent name (e.g. `sample-beta-agent:scout`)"),
@@ -28,6 +29,15 @@ const envelopeFlag = Options.boolean("envelope").pipe(
   ),
 );
 
+const cwdOption = Options.text("cwd").pipe(
+  Options.optional,
+  Options.withDescription("Override the cwd handed to pi (defaults to caller's cwd)"),
+);
+
+const sandboxFlag = Options.boolean("sandbox").pipe(
+  Options.withDescription("Spawn pi in a fresh tempdir; remove it on exit"),
+);
+
 const readStdin = (): Effect.Effect<string> =>
   Effect.tryPromise({
     try: () => new Response(Bun.stdin.stream()).text(),
@@ -39,8 +49,15 @@ const readStdin = (): Effect.Effect<string> =>
 
 export const invokeCommand = Command.make(
   "invoke",
-  { name: nameArg, task: taskArg, stream: streamFlag, envelope: envelopeFlag },
-  ({ name, task, stream, envelope }) =>
+  {
+    name: nameArg,
+    task: taskArg,
+    stream: streamFlag,
+    envelope: envelopeFlag,
+    cwd: cwdOption,
+    sandbox: sandboxFlag,
+  },
+  ({ name, task, stream, envelope, cwd, sandbox }) =>
     Effect.gen(function* () {
       const invoker = yield* Invoker;
       const taskText = task._tag === "Some" ? task.value : yield* readStdin();
@@ -49,13 +66,29 @@ export const invokeCommand = Command.make(
         process.exitCode = 2;
         return;
       }
-      const result = yield* invoker.invoke(name, taskText);
+      const invokeOpts: InvokeOptions = {};
+      if (Option.isSome(cwd)) (invokeOpts as { cwd: string }).cwd = cwd.value;
+      if (sandbox) (invokeOpts as { sandbox: boolean }).sandbox = true;
+
+      const result = yield* invoker.invoke(name, taskText, invokeOpts).pipe(
+        Effect.catchTag("InvokeInvalidArgsError", (e) =>
+          Effect.gen(function* () {
+            yield* Console.error(`pihub invoke: ${e.message}`);
+            process.exitCode = 2;
+            return null;
+          }),
+        ),
+        Effect.catchTag("InvokeCwdNotFoundError", (e) =>
+          Effect.gen(function* () {
+            yield* Console.error(`pihub invoke: ${e.message}`);
+            process.exitCode = 2;
+            return null;
+          }),
+        ),
+      );
+      if (result === null) return;
 
       if (envelope) {
-        // Stream + envelope can coexist: stream first, envelope last on stderr
-        // would collide with normal stderr usage. Rule: --envelope wins on
-        // stdout. If --stream is also set, the raw JSONL goes to stderr so
-        // both channels are still consumable.
         if (stream) process.stderr.write(result.raw);
         const env =
           result.exitCode === 0
@@ -70,7 +103,6 @@ export const invokeCommand = Command.make(
       }
 
       if (stream) {
-        // Emit the raw JSONL stream verbatim, regardless of exit code.
         process.stdout.write(result.raw);
       }
       if (result.exitCode !== 0) {
