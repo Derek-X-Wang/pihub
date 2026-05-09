@@ -6,6 +6,7 @@ import {
   CopyError,
   GitCloneError,
   GithubApiError,
+  LinkSourceUnsupportedError,
   NpmVersionNotFoundError,
   RefNotFoundError,
   SourceFetchError,
@@ -30,10 +31,20 @@ export type SourceFetcherError =
   | GithubApiError
   | RefNotFoundError
   | GitCloneError
-  | NpmVersionNotFoundError;
+  | NpmVersionNotFoundError
+  | LinkSourceUnsupportedError;
+
+export interface SourceFetcherFetchOptions {
+  /** When true (and source is local), symlink instead of cp -r. */
+  readonly link?: boolean;
+}
 
 export interface SourceFetcherShape {
-  readonly fetch: (source: string, dest: string) => Effect.Effect<SourceInfo, SourceFetcherError>;
+  readonly fetch: (
+    source: string,
+    dest: string,
+    opts?: SourceFetcherFetchOptions,
+  ) => Effect.Effect<SourceInfo, SourceFetcherError>;
 }
 
 const walkAndHash = (fs: FileSystem.FileSystem, root: string): Effect.Effect<string, CopyError> =>
@@ -170,7 +181,7 @@ const lockfileSha = (
     return "";
   });
 
-const fetchLocal = (
+const fetchLocalCopy = (
   fs: FileSystem.FileSystem,
   parsed: Extract<ParsedSource, { kind: "local" }>,
   rawSource: string,
@@ -195,6 +206,54 @@ const fetchLocal = (
       ref: `tree-${commitSha.slice(0, 12)}`,
       commitSha,
       depsLockSha,
+      link: false,
+    };
+  });
+
+const fetchLocalLink = (
+  fs: FileSystem.FileSystem,
+  parsed: Extract<ParsedSource, { kind: "local" }>,
+  rawSource: string,
+  dest: string,
+): Effect.Effect<SourceInfo, SourceNotFoundError | CopyError | SourceFetchError> =>
+  Effect.gen(function* () {
+    const exists = yield* fs.exists(parsed.absolutePath).pipe(Effect.orElseSucceed(() => false));
+    if (!exists) {
+      return yield* Effect.fail(
+        new SourceNotFoundError({
+          source: rawSource,
+          message: `local path does not exist: ${parsed.absolutePath}`,
+        }),
+      );
+    }
+    yield* fs.remove(dest, { recursive: true, force: true }).pipe(Effect.ignore);
+    yield* fs.makeDirectory(path.dirname(dest), { recursive: true }).pipe(
+      Effect.mapError(
+        (e) =>
+          new SourceFetchError({
+            source: rawSource,
+            message: `failed to mkdir parent of ${dest}: ${String(e)}`,
+          }),
+      ),
+    );
+    yield* fs.symlink(parsed.absolutePath, dest).pipe(
+      Effect.mapError(
+        (e) =>
+          new SourceFetchError({
+            source: rawSource,
+            message: `failed to symlink ${parsed.absolutePath} → ${dest}: ${String(e)}`,
+          }),
+      ),
+    );
+    return {
+      source: parsed.absolutePath,
+      ref: "link",
+      // Sentinel: linked trees mutate, so a content-hash would give a false
+      // sense of reproducibility. The absolute path of the link target is
+      // stable for as long as the link exists.
+      commitSha: `link:${parsed.absolutePath}`,
+      depsLockSha: "",
+      link: true,
     };
   });
 
@@ -243,6 +302,7 @@ const fetchGithub = (
       ref: requestedRef,
       commitSha,
       depsLockSha,
+      link: false,
     };
   });
 
@@ -276,6 +336,7 @@ const fetchNpm = (
       // a per-kind field; idempotency comparisons still work source-by-source.
       commitSha: version,
       depsLockSha,
+      link: false,
     };
   });
 
@@ -292,7 +353,7 @@ export class SourceFetcher extends Context.Tag("SourceFetcher")<
       const registry = yield* NpmRegistry;
       const tar = yield* TarExtractor;
       return SourceFetcher.of({
-        fetch: (source, dest) =>
+        fetch: (source, dest, opts) =>
           Effect.gen(function* () {
             const parsed = parseSource(source);
             if (!parsed) {
@@ -304,7 +365,18 @@ export class SourceFetcher extends Context.Tag("SourceFetcher")<
                 }),
               );
             }
-            if (parsed.kind === "local") return yield* fetchLocal(fs, parsed, source, dest);
+            if (opts?.link === true && parsed.kind !== "local") {
+              return yield* Effect.fail(
+                new LinkSourceUnsupportedError({
+                  source,
+                  message: `--link is only valid with local-path sources; got kind=${parsed.kind}`,
+                }),
+              );
+            }
+            if (parsed.kind === "local") {
+              if (opts?.link === true) return yield* fetchLocalLink(fs, parsed, source, dest);
+              return yield* fetchLocalCopy(fs, parsed, source, dest);
+            }
             if (parsed.kind === "github") return yield* fetchGithub(fs, api, git, parsed, dest);
             return yield* fetchNpm(fs, registry, tar, parsed, dest);
           }),
@@ -321,19 +393,31 @@ export class SourceFetcher extends Context.Tag("SourceFetcher")<
     Layer.effect(
       SourceFetcher,
       Effect.gen(function* () {
-        const calls = yield* Ref.make<Array<{ source: string; dest: string }>>([]);
+        const calls = yield* Ref.make<
+          Array<{ source: string; dest: string; opts?: SourceFetcherFetchOptions }>
+        >([]);
         const seedMap = new Map(seed);
         return SourceFetcher.of({
-          fetch: (source, dest) =>
+          fetch: (source, dest, opts) =>
             Effect.gen(function* () {
-              yield* Ref.update(calls, (xs) => [...xs, { source, dest }]);
+              yield* Ref.update(calls, (xs) => [
+                ...xs,
+                opts === undefined ? { source, dest } : { source, dest, opts },
+              ]);
               const hit = seedMap.get(source);
-              if (hit) return hit;
+              if (hit) {
+                // Honour the link flag in the recorded info: if the caller
+                // asked to link, surface that even when the seeded value was
+                // a copy. Tests rely on this to assert the flag was forwarded.
+                if (opts?.link === true) return { ...hit, link: true };
+                return hit;
+              }
               return {
                 source,
-                ref: "tree-test",
-                commitSha: "test-commit-sha",
+                ref: opts?.link === true ? "link" : "tree-test",
+                commitSha: opts?.link === true ? `link:${source}` : "test-commit-sha",
                 depsLockSha: "",
+                link: opts?.link === true,
               } satisfies SourceInfo;
             }),
         });

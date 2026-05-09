@@ -10,6 +10,9 @@ export type Shape = typeof Shape.Type;
  * One installed agent entry in the registry. For shape β with multiple
  * `agents/*.md`, each markdown agent gets its own entry; the canonical name
  * is `<dir>:<sub>`.
+ *
+ * `linked === true` means the agent's repo dir is a symlink (slice #6
+ * `--link` mode); the registry/list surface marks linked agents distinctly.
  */
 export const RegistryEntry = Schema.Struct({
   name: Schema.String,
@@ -21,6 +24,7 @@ export const RegistryEntry = Schema.Struct({
   description: Schema.String,
   invoke: Schema.String,
   envDeclared: Schema.Array(Schema.String),
+  linked: Schema.optionalWith(Schema.Boolean, { default: () => false }),
 });
 export type RegistryEntry = typeof RegistryEntry.Type;
 

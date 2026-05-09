@@ -14,14 +14,18 @@ export const listCommand = Command.make("list", {}, () =>
       return;
     }
 
-    const nameWidth = Math.max(4, ...reg.agents.map((a) => a.name.length));
+    const displayName = (name: string, linked: boolean) => (linked ? `${name} [linked]` : name);
+    const nameWidth = Math.max(4, ...reg.agents.map((a) => displayName(a.name, a.linked).length));
     const shapeWidth = Math.max(5, ...reg.agents.map((a) => a.shape.length));
     const header = `${padRight("NAME", nameWidth)}  ${padRight("SHAPE", shapeWidth)}  DESCRIPTION`;
     yield* Console.log(header);
     yield* Console.log("-".repeat(header.length));
     for (const a of reg.agents) {
       yield* Console.log(
-        `${padRight(a.name, nameWidth)}  ${padRight(a.shape, shapeWidth)}  ${a.description}`,
+        `${padRight(displayName(a.name, a.linked), nameWidth)}  ${padRight(
+          a.shape,
+          shapeWidth,
+        )}  ${a.description}`,
       );
     }
   }),
