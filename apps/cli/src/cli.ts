@@ -43,9 +43,12 @@ const Base = Layer.mergeAll(
 // surfaces both Resolver and Store outputs to the rest of the app.
 const EnvLayers = EnvResolver.Live.pipe(Layer.provideMerge(EnvStore.Live));
 
-// AliasStore depends on RegistryStore; chain so AliasStore.Live's RegistryStore
-// dep resolves through the same instance that Installer/Invoker see.
-const AliasLayers = AliasStore.Live.pipe(Layer.provideMerge(RegistryStore.Live));
+// AliasStore + RuntimeSlotManager both depend on RegistryStore. Chain the
+// three so the merged Leaves layer surfaces a single RegistryStore instance
+// to every consumer (Installer, Invoker, Describe).
+const RegistryLayers = Layer.mergeAll(AliasStore.Live, RuntimeSlotManager.Live).pipe(
+  Layer.provideMerge(RegistryStore.Live),
+);
 
 const Leaves = Layer.mergeAll(
   ShapeDetector.Live,
@@ -53,9 +56,8 @@ const Leaves = Layer.mergeAll(
   SourceFetcher.Live,
   Profile.Live,
   LockfileStore.Live,
-  RuntimeSlotManager.Live,
   LogStore.Live,
-  AliasLayers,
+  RegistryLayers,
   EnvLayers,
 ).pipe(Layer.provideMerge(Base));
 
