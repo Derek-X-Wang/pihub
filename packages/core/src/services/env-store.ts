@@ -109,8 +109,7 @@ export class EnvStore extends Context.Tag("EnvStore")<EnvStore, EnvStoreShape>()
       Effect.gen(function* () {
         const store = yield* Ref.make(new Map(seed));
         return {
-          read: (filePath) =>
-            Ref.get(store).pipe(Effect.map((m) => ({ ...m.get(filePath) }))),
+          read: (filePath) => Ref.get(store).pipe(Effect.map((m) => ({ ...m.get(filePath) }))),
           write: (filePath, env) =>
             Ref.update(store, (m) => new Map([...m, [filePath, { ...env }]])),
           set: (filePath, key, value) =>
