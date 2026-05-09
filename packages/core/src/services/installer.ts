@@ -4,9 +4,11 @@ import * as path from "node:path";
 import {
   CopyError,
   FrontmatterParseError,
+  FrozenDriftError,
   GitCloneError,
   GithubApiError,
   InvalidShapeError,
+  LinkSourceUnsupportedError,
   LockfileError,
   ManifestParseError,
   NpmVersionNotFoundError,
@@ -18,7 +20,7 @@ import {
 } from "../errors.js";
 import { parseSource } from "../lib/parse-source.js";
 import { Paths } from "../paths.js";
-import type { BetaAgentInfo, SourceInfo } from "../types.js";
+import type { BetaAgentInfo, InstallOptions, SourceInfo } from "../types.js";
 import { LockfileStore } from "./lockfile-store.js";
 import { ManifestParser } from "./manifest-parser.js";
 import { Profile } from "./profile.js";
@@ -39,7 +41,9 @@ export type InstallerError =
   | GithubApiError
   | RefNotFoundError
   | GitCloneError
-  | NpmVersionNotFoundError;
+  | NpmVersionNotFoundError
+  | FrozenDriftError
+  | LinkSourceUnsupportedError;
 
 export interface InstallResult {
   readonly agentRoot: string;
@@ -48,7 +52,10 @@ export interface InstallResult {
 }
 
 export interface InstallerShape {
-  readonly install: (source: string) => Effect.Effect<InstallResult, InstallerError>;
+  readonly install: (
+    source: string,
+    opts?: InstallOptions,
+  ) => Effect.Effect<InstallResult, InstallerError>;
 }
 
 /**
@@ -91,6 +98,7 @@ const buildBetaEntry = (
     description: agent.description || manifest.description || "",
     invoke: `pihub invoke ${name} "<task>"`,
     envDeclared: manifest.env ? [...manifest.env] : [],
+    linked: info.link,
   };
 };
 
@@ -113,18 +121,32 @@ export class Installer extends Context.Tag("Installer")<Installer, InstallerShap
       const paths = yield* Paths;
 
       return Installer.of({
-        install: (source) =>
+        install: (source, opts) =>
           Effect.gen(function* () {
             const agentRoot = computeAgentRoot(source);
             const repoPath = paths.agentRepo(agentRoot);
+            const link = opts?.link === true;
+            const frozen = opts?.frozen === true;
 
-            const info = yield* fetcher.fetch(source, repoPath);
+            if (link) {
+              const parsed = parseSource(source);
+              if (parsed && parsed.kind !== "local") {
+                return yield* Effect.fail(
+                  new LinkSourceUnsupportedError({
+                    source,
+                    message: `--link is only valid with local-path sources; got kind=${parsed.kind}`,
+                  }),
+                );
+              }
+            }
+
+            const info = yield* fetcher.fetch(source, repoPath, link ? { link: true } : undefined);
             const detection = yield* detector.detect(repoPath);
             if (detection.kind !== "beta") {
               return yield* Effect.fail(
                 new InvalidShapeError({
                   source,
-                  message: `slices #3/#4 support only shape β; detected ${detection.kind}`,
+                  message: `slices #3/#4/#5 support only shape β; detected ${detection.kind}`,
                 }),
               );
             }
@@ -141,8 +163,39 @@ export class Installer extends Context.Tag("Installer")<Installer, InstallerShap
               onSome: (lock) =>
                 lock.source === info.source &&
                 lock.commitSha === info.commitSha &&
-                lock.depsLockSha === info.depsLockSha,
+                lock.depsLockSha === info.depsLockSha &&
+                lock.link === info.link,
             });
+
+            if (frozen) {
+              if (Option.isNone(existingLock)) {
+                return yield* Effect.fail(
+                  new FrozenDriftError({
+                    agentRoot,
+                    message: `--frozen requires an existing lockfile for ${agentRoot}, but none exists`,
+                  }),
+                );
+              }
+              if (!cached) {
+                const lock = existingLock.value;
+                return yield* Effect.fail(
+                  new FrozenDriftError({
+                    agentRoot,
+                    message: `--frozen drift for ${agentRoot}: lockfile pinned at ${lock.commitSha}, resolved ${info.commitSha}`,
+                  }),
+                );
+              }
+              // Frozen + cached → no writes needed; return registry view.
+              const reg = yield* registry.read;
+              const existing = reg.agents.filter(
+                (a) => a.name === agentRoot || a.name.startsWith(`${agentRoot}:`),
+              );
+              return {
+                agentRoot,
+                entries: existing.length > 0 ? existing : entries,
+                cached: true,
+              } satisfies InstallResult;
+            }
 
             if (cached) {
               const reg = yield* registry.read;
@@ -162,6 +215,7 @@ export class Installer extends Context.Tag("Installer")<Installer, InstallerShap
               piSlot: DEFAULT_PI_SLOT,
               depsLockSha: info.depsLockSha,
               installedAt: new Date().toISOString(),
+              link: info.link,
             });
             yield* registry.upsertAgents(entries);
 

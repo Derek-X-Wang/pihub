@@ -83,3 +83,22 @@ export class NpmVersionNotFoundError extends Schema.TaggedError<NpmVersionNotFou
     message: Schema.String,
   },
 ) {}
+
+/**
+ * `pihub install --frozen` detected drift between the resolved source state
+ * and the existing lockfile (or the lockfile was missing entirely). Surfaces
+ * as exit code 2 in the CLI to flag it as bad input for CI.
+ */
+export class FrozenDriftError extends Schema.TaggedError<FrozenDriftError>()("FrozenDriftError", {
+  agentRoot: Schema.String,
+  message: Schema.String,
+}) {}
+
+/** `--link` was supplied with a non-local source (github, npm, …). */
+export class LinkSourceUnsupportedError extends Schema.TaggedError<LinkSourceUnsupportedError>()(
+  "LinkSourceUnsupportedError",
+  {
+    source: Schema.String,
+    message: Schema.String,
+  },
+) {}

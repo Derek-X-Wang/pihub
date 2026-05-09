@@ -86,3 +86,128 @@ describe("Installer (happy path with fakes)", () => {
     }).pipe(Effect.provide(buildAppLayer())),
   );
 });
+
+describe("Installer (--frozen flag)", () => {
+  it.effect("--frozen against a missing lockfile fails with FrozenDriftError", () =>
+    Effect.gen(function* () {
+      const installer = yield* Installer;
+      const exit = yield* Effect.exit(installer.install(FIXTURE_PATH, { frozen: true }));
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("FrozenDriftError");
+    }).pipe(Effect.provide(buildAppLayer())),
+  );
+
+  it.effect("--frozen against a matching lockfile succeeds without writes", () =>
+    Effect.gen(function* () {
+      const installer = yield* Installer;
+      const registry = yield* RegistryStore;
+
+      // Establish baseline
+      const first = yield* installer.install(FIXTURE_PATH);
+      expect(first.cached).toBe(false);
+      const before = yield* registry.read;
+
+      // Frozen verification — same source, same SourceFetcher canned info
+      const verified = yield* installer.install(FIXTURE_PATH, { frozen: true });
+      expect(verified.cached).toBe(true);
+
+      const after = yield* registry.read;
+      expect(after.agents.map((a) => a.name).sort()).toEqual(
+        before.agents.map((a) => a.name).sort(),
+      );
+    }).pipe(Effect.provide(buildAppLayer())),
+  );
+
+  it.effect("--frozen with drift fails with FrozenDriftError", () =>
+    Effect.gen(function* () {
+      const driftLayer = (() => {
+        const repoPath = `${TEST_HOME}/agents/sample-beta-agent/repo`;
+        const fakes = Layer.mergeAll(
+          Paths.Test(TEST_HOME),
+          // First fetch returns one SHA, then mutate fetcher seed via re-build
+          // We simulate drift by seeding the SourceFetcher with two distinct
+          // SourceInfo records keyed by the same source — that's not directly
+          // expressible, so emulate drift by writing the lockfile directly via
+          // the LockfileStore.Test seed and skipping the first install.
+          SourceFetcher.Test(),
+          ShapeDetector.Test(new Map([[repoPath, detection]])),
+          ManifestParser.Test(),
+          Profile.Test(),
+          LockfileStore.Test(
+            new Map([
+              [
+                "sample-beta-agent",
+                {
+                  source: FIXTURE_PATH,
+                  ref: "tree-old",
+                  commitSha: "old-commit-sha",
+                  piSlot: "default",
+                  depsLockSha: "",
+                  installedAt: "2026-05-09T00:00:00.000Z",
+                  link: false,
+                },
+              ],
+            ]),
+          ),
+          RegistryStore.Test(),
+        );
+        return Installer.Live.pipe(Layer.provideMerge(fakes));
+      })();
+
+      const exit = yield* Effect.gen(function* () {
+        const installer = yield* Installer;
+        return yield* Effect.exit(installer.install(FIXTURE_PATH, { frozen: true }));
+      }).pipe(Effect.provide(driftLayer));
+
+      expect(exit._tag).toBe("Failure");
+      const flat = JSON.stringify(exit);
+      expect(flat).toContain("FrozenDriftError");
+      expect(flat).toContain("old-commit-sha");
+    }),
+  );
+});
+
+describe("Installer (--link flag)", () => {
+  it.effect("--link forwards link=true to SourceFetcher and marks entries linked", () =>
+    Effect.gen(function* () {
+      const installer = yield* Installer;
+      const registry = yield* RegistryStore;
+      const lockStore = yield* LockfileStore;
+
+      const result = yield* installer.install(FIXTURE_PATH, { link: true });
+      expect(result.cached).toBe(false);
+      expect(result.entries.every((e) => e.linked)).toBe(true);
+
+      const reg = yield* registry.read;
+      expect(reg.agents.every((a) => a.linked)).toBe(true);
+
+      const lock = yield* lockStore.read("sample-beta-agent");
+      expect(lock._tag).toBe("Some");
+      if (lock._tag === "Some") {
+        expect(lock.value.link).toBe(true);
+        expect(lock.value.depsLockSha).toBe("");
+        expect(lock.value.commitSha).toContain("link:");
+      }
+    }).pipe(Effect.provide(buildAppLayer())),
+  );
+
+  it.effect("--link rejected when source is not local (npm)", () =>
+    Effect.gen(function* () {
+      const installer = yield* Installer;
+      const exit = yield* Effect.exit(installer.install("npm:tiny-package@1.0.0", { link: true }));
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("LinkSourceUnsupportedError");
+    }).pipe(Effect.provide(buildAppLayer())),
+  );
+
+  it.effect("--link rejected when source is github", () =>
+    Effect.gen(function* () {
+      const installer = yield* Installer;
+      const exit = yield* Effect.exit(
+        installer.install("github:owner/repo@v0.1.0", { link: true }),
+      );
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("LinkSourceUnsupportedError");
+    }).pipe(Effect.provide(buildAppLayer())),
+  );
+});

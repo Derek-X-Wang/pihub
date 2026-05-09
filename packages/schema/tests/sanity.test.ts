@@ -48,7 +48,7 @@ describe("@pihub/schema", () => {
     expect(decoded).toEqual({});
   });
 
-  it("Lockfile requires every field", () => {
+  it("Lockfile requires every field and defaults link=false", () => {
     const lock: Lockfile = {
       source: "./fixtures/foo",
       ref: "tree-abc",
@@ -56,9 +56,25 @@ describe("@pihub/schema", () => {
       piSlot: "0.74",
       depsLockSha: "",
       installedAt: "2026-05-09T00:00:00.000Z",
+      link: false,
     };
     const decoded = Effect.runSync(Schema.decodeUnknown(Lockfile)(lock));
     expect(decoded.source).toBe("./fixtures/foo");
+    expect(decoded.link).toBe(false);
+  });
+
+  it("Lockfile decodes legacy v0 entries with no `link` field", () => {
+    const decoded = Effect.runSync(
+      Schema.decodeUnknown(Lockfile)({
+        source: "/abs/legacy",
+        ref: "tree-abc",
+        commitSha: "abc",
+        piSlot: "default",
+        depsLockSha: "",
+        installedAt: "2026-05-09T00:00:00.000Z",
+      }),
+    );
+    expect(decoded.link).toBe(false);
   });
 
   it("Registry seeds an empty agents list", () => {
@@ -77,6 +93,7 @@ describe("@pihub/schema", () => {
       description: "scout the codebase",
       invoke: 'pihub invoke sample-beta-agent:scout "<task>"',
       envDeclared: [],
+      linked: false,
     };
     const decoded = Effect.runSync(Schema.decodeUnknown(RegistryEntry)(entry));
     expect(decoded.shape).toBe("beta");

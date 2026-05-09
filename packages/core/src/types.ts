@@ -17,12 +17,24 @@ export type DetectionResult =
 
 /**
  * Information SourceFetcher returns after materialising a source into the
- * agent repo dir. `commitSha` is a real SHA for git sources and a synthesised
- * file-tree hash for local paths.
+ * agent repo dir. `commitSha` is a real SHA for git sources, a synthesised
+ * file-tree hash for local copies, the resolved version for npm, and a
+ * sentinel `link:<absolutePath>` for --link installs (where the tree
+ * mutates so a content hash is meaningless).
  */
 export interface SourceInfo {
   readonly source: string;
   readonly ref: string;
   readonly commitSha: string;
   readonly depsLockSha: string;
+  /** True iff the fetcher used a symlink (--link) instead of materialising bytes. */
+  readonly link: boolean;
+}
+
+/** Install-time options forwarded from the CLI to SourceFetcher and Installer. */
+export interface InstallOptions {
+  /** CI mode: fail with FrozenDriftError on any state drift. */
+  readonly frozen?: boolean;
+  /** Live-dev mode: symlink instead of cp -r (local sources only). */
+  readonly link?: boolean;
 }
