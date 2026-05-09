@@ -143,7 +143,7 @@ describe("RuntimeSlotManager (live, faked BunInstaller)", () => {
       yield* manager.ensureSlot("0.74");
       yield* manager.ensureSlot("0.75");
       const deleted = yield* manager.gc;
-      expect(deleted.sort()).toEqual(["0.75"]);
+      expect([...deleted].sort()).toEqual(["0.75"]);
       const list = yield* manager.listSlots;
       expect(list.map((s) => s.minor)).toEqual(["0.74"]);
     }).pipe(Effect.provide(buildLiveLayer(home, [sampleEntry("a", "0.74")]))),
