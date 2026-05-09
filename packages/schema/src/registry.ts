@@ -1,0 +1,38 @@
+import { Schema } from "effect";
+
+/**
+ * Shape α (Pi package — package.json `pi` field) or β (markdown agents).
+ */
+export const Shape = Schema.Literal("alpha", "beta");
+export type Shape = typeof Shape.Type;
+
+/**
+ * One installed agent entry in the registry. For shape β with multiple
+ * `agents/*.md`, each markdown agent gets its own entry; the canonical name
+ * is `<dir>:<sub>`.
+ */
+export const RegistryEntry = Schema.Struct({
+  name: Schema.String,
+  shape: Shape,
+  piSlot: Schema.String,
+  source: Schema.String,
+  ref: Schema.String,
+  commitSha: Schema.String,
+  description: Schema.String,
+  invoke: Schema.String,
+  envDeclared: Schema.Array(Schema.String),
+});
+export type RegistryEntry = typeof RegistryEntry.Type;
+
+/**
+ * Cached agent list at `~/.pihub/registry.json`. `version` is bumped on
+ * breaking schema changes so old files can be migrated or rejected.
+ */
+export const Registry = Schema.Struct({
+  version: Schema.Number,
+  agents: Schema.Array(RegistryEntry),
+});
+export type Registry = typeof Registry.Type;
+
+export const REGISTRY_VERSION = 1;
+export const emptyRegistry: Registry = { version: REGISTRY_VERSION, agents: [] };

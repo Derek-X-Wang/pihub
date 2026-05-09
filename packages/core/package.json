@@ -8,6 +8,7 @@
     "@effect/platform": "^0.96.0",
     "@effect/platform-bun": "^0.89.0",
     "@pihub/schema": "workspace:*",
-    "effect": "^3.21.0"
+    "effect": "^3.21.0",
+    "yaml": "^2.8.4"
   }
 }
