@@ -2,16 +2,19 @@
 import { Command } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
 import {
+  BunInstaller,
   Describe,
   GitClient,
   GithubApi,
   Installer,
+  Invoker,
   LockfileStore,
   ManifestParser,
   NpmRegistry,
   Paths,
   Profile,
   RegistryStore,
+  RuntimeSlotManager,
   ShapeDetector,
   SourceFetcher,
   TarExtractor,
@@ -27,6 +30,7 @@ const Base = Layer.mergeAll(
   GitClient.Live,
   NpmRegistry.Live,
   TarExtractor.Live,
+  BunInstaller.Live,
 );
 
 const Leaves = Layer.mergeAll(
@@ -36,9 +40,12 @@ const Leaves = Layer.mergeAll(
   Profile.Live,
   LockfileStore.Live,
   RegistryStore.Live,
+  RuntimeSlotManager.Live,
 ).pipe(Layer.provideMerge(Base));
 
-const AppLayer = Layer.mergeAll(Installer.Live, Describe.Live).pipe(Layer.provideMerge(Leaves));
+const AppLayer = Layer.mergeAll(Installer.Live, Describe.Live, Invoker.Live).pipe(
+  Layer.provideMerge(Leaves),
+);
 
 const cli = Command.run(rootCommand, {
   name: "pihub",

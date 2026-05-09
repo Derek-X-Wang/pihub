@@ -84,7 +84,7 @@ describe("install + list (live, fixture-driven smoke)", () => {
       const lockJson = JSON.parse(yield* Effect.promise(() => fsp.readFile(lockPath, "utf8")));
       expect(typeof lockJson.commitSha).toBe("string");
       expect(lockJson.commitSha.length).toBeGreaterThan(0);
-      expect(lockJson.piSlot).toBe("default");
+      expect(lockJson.piSlot).toBe("0.74");
       expect(lockJson.installedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
 
       // Profile dir created (acceptance criterion #4)
