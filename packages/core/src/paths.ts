@@ -19,6 +19,7 @@ export interface PathsShape {
   readonly agentEnv: (name: string) => string;
   readonly agentLockfile: (name: string) => string;
   readonly runtimeSlot: (minor: string) => string;
+  readonly ephemeralRoot: string;
 }
 
 const makePaths = (root: string): PathsShape => ({
@@ -34,6 +35,7 @@ const makePaths = (root: string): PathsShape => ({
   agentEnv: (n) => path.join(root, "agents", n, "env"),
   agentLockfile: (n) => path.join(root, "agents", n, "install.lock.json"),
   runtimeSlot: (minor) => path.join(root, "runtime", "pi", minor),
+  ephemeralRoot: path.join(root, "runtime", "ephemeral"),
 });
 
 export class Paths extends Context.Tag("Paths")<Paths, PathsShape>() {

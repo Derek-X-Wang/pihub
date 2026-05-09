@@ -87,9 +87,30 @@ export const DEFAULT_INVOKE_TIMEOUT_S = 600;
 /** Hard SIGKILL grace after the initial SIGINT. */
 const KILL_GRACE_MS = 5000;
 
+/**
+ * Ephemeral overrides for `pihub run` and other one-shot callers that build a
+ * RegistryEntry off-registry. The Invoker uses these instead of looking the
+ * agent up in RegistryStore + AliasStore + Paths.agentProfile.
+ */
+export interface InvokeEntryOverride {
+  readonly entry: import("@pihub/schema").RegistryEntry;
+  readonly profilePath: string;
+  /** Skip LogStore.record — ephemeral runs don't pollute persistent logs. */
+  readonly skipLog?: boolean;
+}
+
 export interface InvokerShape {
   readonly invoke: (
     agentName: string,
+    task: string,
+    opts?: InvokeOptions,
+  ) => Effect.Effect<InvokeResult, InvokerError>;
+  /**
+   * Direct entry-based invocation: bypasses registry/alias resolution. Used
+   * by `pihub run` for ephemeral installs and by future `pihub eval` harnesses.
+   */
+  readonly invokeEntry: (
+    override: InvokeEntryOverride,
     task: string,
     opts?: InvokeOptions,
   ) => Effect.Effect<InvokeResult, InvokerError>;
@@ -239,159 +260,165 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
       const envResolver = yield* EnvResolver;
       const aliasStore = yield* AliasStore;
       const logStore = yield* LogStore;
-      return {
-        invoke: (name, task, opts) =>
-          Effect.gen(function* () {
-            const invocationId = randomUUID();
-            const startedAt = Date.now();
 
-            // Validate flag combination first — invalid input must short-circuit.
-            if (opts?.cwd !== undefined && opts?.sandbox === true) {
+      const validateOpts = (opts: InvokeOptions | undefined) =>
+        Effect.gen(function* () {
+          if (opts?.cwd !== undefined && opts?.sandbox === true) {
+            return yield* Effect.fail(
+              new InvokeInvalidArgsError({
+                message: "--cwd and --sandbox are mutually exclusive",
+              }),
+            );
+          }
+          if (opts?.cwd !== undefined) {
+            const exists = yield* Effect.tryPromise({
+              try: () =>
+                fsp
+                  .stat(opts.cwd as string)
+                  .then((s) => s.isDirectory())
+                  .catch(() => false),
+              catch: () => false,
+            }).pipe(Effect.orElseSucceed(() => false));
+            if (!exists) {
               return yield* Effect.fail(
-                new InvokeInvalidArgsError({
-                  message: "--cwd and --sandbox are mutually exclusive",
+                new InvokeCwdNotFoundError({
+                  cwd: opts.cwd,
+                  message: `--cwd path does not exist or is not a directory: ${opts.cwd}`,
                 }),
               );
             }
+          }
+        });
 
-            // If --cwd: assert path exists. The fs.access throw maps to a
-            // tagged error with exit-2 semantics in the CLI.
-            if (opts?.cwd !== undefined) {
-              const exists = yield* Effect.tryPromise({
-                try: () =>
-                  fsp
-                    .stat(opts.cwd as string)
-                    .then((s) => s.isDirectory())
-                    .catch(() => false),
-                catch: () => false,
-              }).pipe(Effect.orElseSucceed(() => false));
-              if (!exists) {
-                return yield* Effect.fail(
-                  new InvokeCwdNotFoundError({
-                    cwd: opts.cwd,
-                    message: `--cwd path does not exist or is not a directory: ${opts.cwd}`,
-                  }),
-                );
-              }
-            }
+      // Shared spawn-and-aggregate path — used by both the registry-based
+      // `invoke` and the entry-based `invokeEntry` (slice #18 `pihub run`).
+      const runWithEntry = (
+        entry: import("@pihub/schema").RegistryEntry,
+        profilePath: string,
+        envAgentRootKey: string,
+        task: string,
+        opts: InvokeOptions | undefined,
+        skipLog: boolean,
+      ) =>
+        Effect.gen(function* () {
+          const invocationId = randomUUID();
+          const startedAt = Date.now();
 
-            // Resolve aliases first; falls through to the supplied name when
-            // no alias is set.
-            const canonical = yield* aliasStore.resolve(name);
-            const entry = yield* lookupRegistry(registry, canonical);
-            const binary = yield* runtime.ensureSlot(entry.piSlot);
-            const profile = paths.agentProfile(agentRootOf(canonical));
-            const allowlist = entry.envDeclared.length > 0 ? entry.envDeclared : undefined;
-            const resolved = yield* envResolver.resolve(agentRootOf(canonical), allowlist);
-            // PI_CODING_AGENT_DIR / PI_PACKAGE_DIR are PiHub plumbing — they
-            // override any value the resolver layers might have set so the
-            // profile-isolation invariant from CONTEXT.md holds.
-            const env: Record<string, string> = {
-              ...resolved,
-              PI_CODING_AGENT_DIR: profile,
-              PI_PACKAGE_DIR: path.join(profile, "packages"),
-            };
+          yield* validateOpts(opts);
 
-            // Sandbox mode: acquire-release temp dir. Cleanup is wired to the
-            // Effect scope so it runs on success, failure, and interruption.
-            const cwdResource = opts?.sandbox
-              ? Effect.acquireRelease(
-                  Effect.tryPromise({
-                    try: () => fsp.mkdtemp(path.join(os.tmpdir(), "pihub-sandbox-")),
-                    catch: (e) =>
-                      new InvokeSpawnError({
-                        binary,
-                        message: `failed to create sandbox tempdir: ${String(e)}`,
-                      }),
-                  }),
-                  (dir) =>
-                    Effect.promise(() => fsp.rm(dir, { recursive: true, force: true })).pipe(
-                      Effect.ignore,
-                    ),
-                )
-              : Effect.succeed(opts?.cwd ?? process.cwd());
+          const binary = yield* runtime.ensureSlot(entry.piSlot);
+          const allowlist = entry.envDeclared.length > 0 ? entry.envDeclared : undefined;
+          const resolved = yield* envResolver.resolve(envAgentRootKey, allowlist);
+          // PI_CODING_AGENT_DIR / PI_PACKAGE_DIR are PiHub plumbing — they
+          // override any value the resolver layers might have set so the
+          // profile-isolation invariant from CONTEXT.md holds.
+          const env: Record<string, string> = {
+            ...resolved,
+            PI_CODING_AGENT_DIR: profilePath,
+            PI_PACKAGE_DIR: path.join(profilePath, "packages"),
+          };
 
-            // Resolve timeout: --timeout opt > registry's manifest value > default 600s.
-            const timeoutSeconds =
-              opts?.timeoutSeconds ?? entry.timeoutSeconds ?? DEFAULT_INVOKE_TIMEOUT_S;
-            const timeoutMs = Math.max(1, Math.floor(timeoutSeconds * 1000));
-            const externalSignal = opts?.signal;
-
-            const result = yield* Effect.scoped(
-              Effect.gen(function* () {
-                const cwd = yield* cwdResource;
-                return yield* Effect.tryPromise({
-                  try: () =>
-                    new Promise<{
-                      stdout: string;
-                      stderr: string;
-                      exitCode: number;
-                      terminationReason: TerminationReason;
-                    }>((resolve, reject) => {
-                      const child = spawn(binary, ["--mode", "json", "--no-session", "-p", task], {
-                        env,
-                        cwd,
-                        stdio: ["ignore", "pipe", "pipe"],
-                      });
-                      const stdoutChunks: Buffer[] = [];
-                      const stderrChunks: Buffer[] = [];
-                      let termination: TerminationReason = null;
-                      let killTimer: ReturnType<typeof setTimeout> | null = null;
-                      const startKill = (cause: TerminationReason) => {
-                        if (termination !== null) return;
-                        termination = cause;
-                        try {
-                          child.kill("SIGINT");
-                        } catch {
-                          // child may already be dead; ignore
-                        }
-                        killTimer = setTimeout(() => {
-                          try {
-                            if (!child.killed) child.kill("SIGKILL");
-                          } catch {
-                            // ignore
-                          }
-                        }, KILL_GRACE_MS);
-                      };
-                      const timeoutTimer = setTimeout(() => startKill("timeout"), timeoutMs);
-                      const onAbort = () => startKill("abort");
-                      if (externalSignal) {
-                        if (externalSignal.aborted) onAbort();
-                        else externalSignal.addEventListener("abort", onAbort, { once: true });
-                      }
-                      child.stdout.on("data", (b: Buffer) => stdoutChunks.push(b));
-                      child.stderr.on("data", (b: Buffer) => stderrChunks.push(b));
-                      child.on("error", (e) => {
-                        clearTimeout(timeoutTimer);
-                        if (killTimer) clearTimeout(killTimer);
-                        if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
-                        reject(e);
-                      });
-                      child.on("close", (code) => {
-                        clearTimeout(timeoutTimer);
-                        if (killTimer) clearTimeout(killTimer);
-                        if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
-                        let finalExit: number;
-                        if (termination === "timeout") finalExit = 124;
-                        else if (termination === "abort") finalExit = 130;
-                        else finalExit = code ?? 1;
-                        resolve({
-                          stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-                          stderr: Buffer.concat(stderrChunks).toString("utf8"),
-                          exitCode: finalExit,
-                          terminationReason: termination,
-                        });
-                      });
-                    }),
+          // Sandbox mode: acquire-release temp dir. Cleanup is wired to the
+          // Effect scope so it runs on success, failure, and interruption.
+          const cwdResource = opts?.sandbox
+            ? Effect.acquireRelease(
+                Effect.tryPromise({
+                  try: () => fsp.mkdtemp(path.join(os.tmpdir(), "pihub-sandbox-")),
                   catch: (e) =>
-                    new InvokeSpawnError({ binary, message: `spawn failed: ${String(e)}` }),
-                });
-              }),
-            );
-            const agg = aggregate(result.stdout);
-            const text = result.exitCode === 0 ? agg.text : "";
-            const durationMs = Date.now() - startedAt;
+                    new InvokeSpawnError({
+                      binary,
+                      message: `failed to create sandbox tempdir: ${String(e)}`,
+                    }),
+                }),
+                (dir) =>
+                  Effect.promise(() => fsp.rm(dir, { recursive: true, force: true })).pipe(
+                    Effect.ignore,
+                  ),
+              )
+            : Effect.succeed(opts?.cwd ?? process.cwd());
 
+          // Resolve timeout: --timeout opt > registry's manifest value > default 600s.
+          const timeoutSeconds =
+            opts?.timeoutSeconds ?? entry.timeoutSeconds ?? DEFAULT_INVOKE_TIMEOUT_S;
+          const timeoutMs = Math.max(1, Math.floor(timeoutSeconds * 1000));
+          const externalSignal = opts?.signal;
+
+          const result = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const cwd = yield* cwdResource;
+              return yield* Effect.tryPromise({
+                try: () =>
+                  new Promise<{
+                    stdout: string;
+                    stderr: string;
+                    exitCode: number;
+                    terminationReason: TerminationReason;
+                  }>((resolve, reject) => {
+                    const child = spawn(binary, ["--mode", "json", "--no-session", "-p", task], {
+                      env,
+                      cwd,
+                      stdio: ["ignore", "pipe", "pipe"],
+                    });
+                    const stdoutChunks: Buffer[] = [];
+                    const stderrChunks: Buffer[] = [];
+                    let termination: TerminationReason = null;
+                    let killTimer: ReturnType<typeof setTimeout> | null = null;
+                    const startKill = (cause: TerminationReason) => {
+                      if (termination !== null) return;
+                      termination = cause;
+                      try {
+                        child.kill("SIGINT");
+                      } catch {
+                        // child may already be dead; ignore
+                      }
+                      killTimer = setTimeout(() => {
+                        try {
+                          if (!child.killed) child.kill("SIGKILL");
+                        } catch {
+                          // ignore
+                        }
+                      }, KILL_GRACE_MS);
+                    };
+                    const timeoutTimer = setTimeout(() => startKill("timeout"), timeoutMs);
+                    const onAbort = () => startKill("abort");
+                    if (externalSignal) {
+                      if (externalSignal.aborted) onAbort();
+                      else externalSignal.addEventListener("abort", onAbort, { once: true });
+                    }
+                    child.stdout.on("data", (b: Buffer) => stdoutChunks.push(b));
+                    child.stderr.on("data", (b: Buffer) => stderrChunks.push(b));
+                    child.on("error", (e) => {
+                      clearTimeout(timeoutTimer);
+                      if (killTimer) clearTimeout(killTimer);
+                      if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
+                      reject(e);
+                    });
+                    child.on("close", (code) => {
+                      clearTimeout(timeoutTimer);
+                      if (killTimer) clearTimeout(killTimer);
+                      if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
+                      let finalExit: number;
+                      if (termination === "timeout") finalExit = 124;
+                      else if (termination === "abort") finalExit = 130;
+                      else finalExit = code ?? 1;
+                      resolve({
+                        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+                        stderr: Buffer.concat(stderrChunks).toString("utf8"),
+                        exitCode: finalExit,
+                        terminationReason: termination,
+                      });
+                    });
+                  }),
+                catch: (e) =>
+                  new InvokeSpawnError({ binary, message: `spawn failed: ${String(e)}` }),
+              });
+            }),
+          );
+          const agg = aggregate(result.stdout);
+          const text = result.exitCode === 0 ? agg.text : "";
+          const durationMs = Date.now() - startedAt;
+
+          if (!skipLog) {
             // Persist invocation log + ring-buffer prune. Failures here don't
             // change the user-visible result — observability is best-effort.
             yield* logStore
@@ -408,26 +435,48 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
             yield* logStore
               .prune(entry.name, DEFAULT_LOG_RETENTION)
               .pipe(Effect.catchAll(() => Effect.void));
+          }
 
-            return {
-              text,
-              raw: result.stdout,
-              stderr: result.stderr,
-              exitCode: result.exitCode,
-              invocationId,
-              agent: entry.name,
-              version: entry.commitSha,
-              durationMs,
-              sessionId: agg.sessionId,
-              usage: agg.usage,
-              toolCalls: agg.toolCalls,
-              stopReason: agg.stopReason,
-              errorMessage: agg.errorMessage,
-              lastAssistantMessage: agg.lastAssistantMessage,
-              lastToolCall: agg.lastToolCall,
-              terminationReason: result.terminationReason,
-            } satisfies InvokeResult;
+          return {
+            text,
+            raw: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode,
+            invocationId,
+            agent: entry.name,
+            version: entry.commitSha,
+            durationMs,
+            sessionId: agg.sessionId,
+            usage: agg.usage,
+            toolCalls: agg.toolCalls,
+            stopReason: agg.stopReason,
+            errorMessage: agg.errorMessage,
+            lastAssistantMessage: agg.lastAssistantMessage,
+            lastToolCall: agg.lastToolCall,
+            terminationReason: result.terminationReason,
+          } satisfies InvokeResult;
+        });
+
+      return {
+        invoke: (name, task, opts) =>
+          Effect.gen(function* () {
+            // Resolve aliases first; falls through to the supplied name when
+            // no alias is set.
+            const canonical = yield* aliasStore.resolve(name);
+            const entry = yield* lookupRegistry(registry, canonical);
+            const root = agentRootOf(canonical);
+            const profilePath = paths.agentProfile(root);
+            return yield* runWithEntry(entry, profilePath, root, task, opts, false);
           }),
+        invokeEntry: (override, task, opts) =>
+          runWithEntry(
+            override.entry,
+            override.profilePath,
+            agentRootOf(override.entry.name),
+            task,
+            opts,
+            override.skipLog === true,
+          ),
       } satisfies InvokerShape;
     }),
   );
