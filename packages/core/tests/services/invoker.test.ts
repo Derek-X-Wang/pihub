@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect } from "vitest";
 import { Paths } from "../../src/paths.js";
+import type { InvokeOptions } from "../../src/services/invoker.js";
 import { Invoker } from "../../src/services/invoker.js";
 import { RegistryStore } from "../../src/services/registry-store.js";
 import { RuntimeSlotManager } from "../../src/services/runtime-slot.js";
@@ -387,6 +388,115 @@ describe("Invoker (live spawn against faux-pi shell script)", () => {
       );
       expect(stillExists).toBe(false);
     }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+  );
+
+  it.effect(
+    "--timeout: faux-pi sleeps; pi killed; exit 124",
+    () =>
+      Effect.gen(function* () {
+        const profile = path.join(home, "agents", "sample-beta-agent", "profile");
+        const binDir = path.join(home, "fakebin");
+        const pi = path.join(binDir, "pi");
+        // Use a python-style trap-and-exit so SIGINT actually gets handled
+        // promptly. (bash's trap-during-sleep sometimes waits for sleep to
+        // return before running the handler, blowing past the test deadline.)
+        yield* Effect.promise(async () => {
+          await fsp.mkdir(binDir, { recursive: true });
+          await fsp.writeFile(
+            pi,
+            [
+              "#!/usr/bin/env bash",
+              `if [ "$PI_CODING_AGENT_DIR" != "${profile}" ]; then exit 99; fi`,
+              // Background sleep + wait pattern: bash receives SIGINT, kills",
+              // the background sleep via `kill 0`, trap fires immediately.",
+              "sleep 30 &",
+              "PID=$!",
+              "trap 'kill $PID 2>/dev/null; exit 130' INT TERM",
+              "wait $PID",
+              "exit 0",
+            ].join("\n"),
+            { mode: 0o755 },
+          );
+        });
+        const invoker = yield* Invoker;
+        const result = yield* invoker.invoke("sample-beta-agent:scout", "ping", {
+          timeoutSeconds: 1,
+        } as InvokeOptions);
+        expect(result.terminationReason).toBe("timeout");
+        expect(result.exitCode).toBe(124);
+      }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+    15000,
+  );
+
+  it.effect(
+    "abort: caller AbortSignal forwards to pi; exit 130",
+    () =>
+      Effect.gen(function* () {
+        const profile = path.join(home, "agents", "sample-beta-agent", "profile");
+        const binDir = path.join(home, "fakebin");
+        const pi = path.join(binDir, "pi");
+        yield* Effect.promise(async () => {
+          await fsp.mkdir(binDir, { recursive: true });
+          await fsp.writeFile(
+            pi,
+            [
+              "#!/usr/bin/env bash",
+              `if [ "$PI_CODING_AGENT_DIR" != "${profile}" ]; then exit 99; fi`,
+              "sleep 30 &",
+              "PID=$!",
+              "trap 'kill $PID 2>/dev/null; exit 130' INT TERM",
+              "wait $PID",
+            ].join("\n"),
+            { mode: 0o755 },
+          );
+        });
+        const ac = new AbortController();
+        setTimeout(() => ac.abort(), 200);
+        const invoker = yield* Invoker;
+        const result = yield* invoker.invoke("sample-beta-agent:scout", "ping", {
+          signal: ac.signal,
+          timeoutSeconds: 60,
+        } as InvokeOptions);
+        expect(result.terminationReason).toBe("abort");
+        expect(result.exitCode).toBe(130);
+      }).pipe(Effect.provide(buildLayer(home, path.join(home, "fakebin", "pi"), [sampleEntry]))),
+    15000,
+  );
+
+  it.effect(
+    "manifest timeoutSeconds is the fallback when --timeout is not set",
+    () =>
+      Effect.gen(function* () {
+        const profile = path.join(home, "agents", "sample-beta-agent", "profile");
+        const binDir = path.join(home, "fakebin");
+        const pi = path.join(binDir, "pi");
+        yield* Effect.promise(async () => {
+          await fsp.mkdir(binDir, { recursive: true });
+          await fsp.writeFile(
+            pi,
+            [
+              "#!/usr/bin/env bash",
+              `if [ "$PI_CODING_AGENT_DIR" != "${profile}" ]; then exit 99; fi`,
+              "sleep 30 &",
+              "PID=$!",
+              "trap 'kill $PID 2>/dev/null; exit 130' INT TERM",
+              "wait $PID",
+            ].join("\n"),
+            { mode: 0o755 },
+          );
+        });
+        const invoker = yield* Invoker;
+        const result = yield* invoker.invoke("sample-beta-agent:scout", "ping");
+        expect(result.terminationReason).toBe("timeout");
+        expect(result.exitCode).toBe(124);
+      }).pipe(
+        Effect.provide(
+          buildLayer(home, path.join(home, "fakebin", "pi"), [
+            { ...sampleEntry, timeoutSeconds: 1 },
+          ]),
+        ),
+      ),
+    15000,
   );
 
   it.effect("--sandbox: tempdir cleanup runs even when pi exits non-zero", () =>

@@ -94,7 +94,7 @@ const buildBetaEntry = (
   piSlot: string,
 ): RegistryEntry => {
   const name = `${agentRoot}:${agent.subName}`;
-  return {
+  const entry: RegistryEntry = {
     name,
     shape: "beta",
     piSlot,
@@ -107,6 +107,10 @@ const buildBetaEntry = (
     linked: info.link,
     permissions: manifest.permissions ? [...manifest.permissions] : [],
   };
+  if (manifest.timeoutSeconds !== undefined) {
+    (entry as { timeoutSeconds: number }).timeoutSeconds = manifest.timeoutSeconds;
+  }
+  return entry;
 };
 
 const buildAlphaEntry = (
@@ -115,19 +119,25 @@ const buildAlphaEntry = (
   info: SourceInfo,
   manifest: Manifest,
   piSlot: string,
-): RegistryEntry => ({
-  name: agentRoot,
-  shape: "alpha",
-  piSlot,
-  source: info.source,
-  ref: info.ref,
-  commitSha: info.commitSha,
-  description: manifest.description || alpha.description || "",
-  invoke: `pihub invoke ${agentRoot} "<task>"`,
-  envDeclared: manifest.env ? [...manifest.env] : [],
-  linked: info.link,
-  permissions: manifest.permissions ? [...manifest.permissions] : [],
-});
+): RegistryEntry => {
+  const entry: RegistryEntry = {
+    name: agentRoot,
+    shape: "alpha",
+    piSlot,
+    source: info.source,
+    ref: info.ref,
+    commitSha: info.commitSha,
+    description: manifest.description || alpha.description || "",
+    invoke: `pihub invoke ${agentRoot} "<task>"`,
+    envDeclared: manifest.env ? [...manifest.env] : [],
+    linked: info.link,
+    permissions: manifest.permissions ? [...manifest.permissions] : [],
+  };
+  if (manifest.timeoutSeconds !== undefined) {
+    (entry as { timeoutSeconds: number }).timeoutSeconds = manifest.timeoutSeconds;
+  }
+  return entry;
+};
 
 /**
  * Default Pi runtime slot until slice #17 implements per-agent minor

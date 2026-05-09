@@ -25,6 +25,8 @@ import { RuntimeSlotManager } from "./runtime-slot.js";
  * errorMessage) so the CLI can render the slice-#11 envelope without a second
  * pass over the stream.
  */
+export type TerminationReason = "timeout" | "abort" | null;
+
 export interface InvokeResult {
   readonly text: string;
   readonly raw: string;
@@ -41,6 +43,8 @@ export interface InvokeResult {
   readonly errorMessage: string;
   readonly lastAssistantMessage: string;
   readonly lastToolCall: unknown;
+  /** Why pi was killed externally, if anything. `null` for natural exits. */
+  readonly terminationReason: TerminationReason;
 }
 
 export type InvokerError =
@@ -57,7 +61,22 @@ export interface InvokeOptions {
   readonly cwd?: string;
   /** Spawn pi in a fresh tempdir; remove it on exit. Mutually exclusive with `cwd`. */
   readonly sandbox?: boolean;
+  /**
+   * Hard timeout in seconds. Precedence: opts.timeoutSeconds > registry
+   * entry's `timeoutSeconds` (from manifest) > 600s default.
+   */
+  readonly timeoutSeconds?: number;
+  /**
+   * Caller-controlled abort signal. Aborting it forwards SIGINT to pi,
+   * waits 5s for graceful exit, then SIGKILLs.
+   */
+  readonly signal?: AbortSignal;
 }
+
+/** Default invocation timeout when neither flag nor manifest sets one. */
+export const DEFAULT_INVOKE_TIMEOUT_S = 600;
+/** Hard SIGKILL grace after the initial SIGINT. */
+const KILL_GRACE_MS = 5000;
 
 export interface InvokerShape {
   readonly invoke: (
@@ -272,32 +291,78 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
                 )
               : Effect.succeed(opts?.cwd ?? process.cwd());
 
+            // Resolve timeout: --timeout opt > registry's manifest value > default 600s.
+            const timeoutSeconds =
+              opts?.timeoutSeconds ?? entry.timeoutSeconds ?? DEFAULT_INVOKE_TIMEOUT_S;
+            const timeoutMs = Math.max(1, Math.floor(timeoutSeconds * 1000));
+            const externalSignal = opts?.signal;
+
             const result = yield* Effect.scoped(
               Effect.gen(function* () {
                 const cwd = yield* cwdResource;
                 return yield* Effect.tryPromise({
                   try: () =>
-                    new Promise<{ stdout: string; stderr: string; exitCode: number }>(
-                      (resolve, reject) => {
-                        const child = spawn(
-                          binary,
-                          ["--mode", "json", "--no-session", "-p", task],
-                          { env, cwd, stdio: ["ignore", "pipe", "pipe"] },
-                        );
-                        const stdoutChunks: Buffer[] = [];
-                        const stderrChunks: Buffer[] = [];
-                        child.stdout.on("data", (b: Buffer) => stdoutChunks.push(b));
-                        child.stderr.on("data", (b: Buffer) => stderrChunks.push(b));
-                        child.on("error", reject);
-                        child.on("close", (code) =>
-                          resolve({
-                            stdout: Buffer.concat(stdoutChunks).toString("utf8"),
-                            stderr: Buffer.concat(stderrChunks).toString("utf8"),
-                            exitCode: code ?? 1,
-                          }),
-                        );
-                      },
-                    ),
+                    new Promise<{
+                      stdout: string;
+                      stderr: string;
+                      exitCode: number;
+                      terminationReason: TerminationReason;
+                    }>((resolve, reject) => {
+                      const child = spawn(binary, ["--mode", "json", "--no-session", "-p", task], {
+                        env,
+                        cwd,
+                        stdio: ["ignore", "pipe", "pipe"],
+                      });
+                      const stdoutChunks: Buffer[] = [];
+                      const stderrChunks: Buffer[] = [];
+                      let termination: TerminationReason = null;
+                      let killTimer: ReturnType<typeof setTimeout> | null = null;
+                      const startKill = (cause: TerminationReason) => {
+                        if (termination !== null) return;
+                        termination = cause;
+                        try {
+                          child.kill("SIGINT");
+                        } catch {
+                          // child may already be dead; ignore
+                        }
+                        killTimer = setTimeout(() => {
+                          try {
+                            if (!child.killed) child.kill("SIGKILL");
+                          } catch {
+                            // ignore
+                          }
+                        }, KILL_GRACE_MS);
+                      };
+                      const timeoutTimer = setTimeout(() => startKill("timeout"), timeoutMs);
+                      const onAbort = () => startKill("abort");
+                      if (externalSignal) {
+                        if (externalSignal.aborted) onAbort();
+                        else externalSignal.addEventListener("abort", onAbort, { once: true });
+                      }
+                      child.stdout.on("data", (b: Buffer) => stdoutChunks.push(b));
+                      child.stderr.on("data", (b: Buffer) => stderrChunks.push(b));
+                      child.on("error", (e) => {
+                        clearTimeout(timeoutTimer);
+                        if (killTimer) clearTimeout(killTimer);
+                        if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
+                        reject(e);
+                      });
+                      child.on("close", (code) => {
+                        clearTimeout(timeoutTimer);
+                        if (killTimer) clearTimeout(killTimer);
+                        if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
+                        let finalExit: number;
+                        if (termination === "timeout") finalExit = 124;
+                        else if (termination === "abort") finalExit = 130;
+                        else finalExit = code ?? 1;
+                        resolve({
+                          stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+                          stderr: Buffer.concat(stderrChunks).toString("utf8"),
+                          exitCode: finalExit,
+                          terminationReason: termination,
+                        });
+                      });
+                    }),
                   catch: (e) =>
                     new InvokeSpawnError({ binary, message: `spawn failed: ${String(e)}` }),
                 });
@@ -322,6 +387,7 @@ export class Invoker extends Context.Tag("Invoker")<Invoker, InvokerShape>() {
               errorMessage: agg.errorMessage,
               lastAssistantMessage: agg.lastAssistantMessage,
               lastToolCall: agg.lastToolCall,
+              terminationReason: result.terminationReason,
             } satisfies InvokeResult;
           }),
       } satisfies InvokerShape;

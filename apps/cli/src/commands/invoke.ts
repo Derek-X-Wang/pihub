@@ -2,8 +2,8 @@ import { Args, Command, Options } from "@effect/cli";
 import {
   buildFailureEnvelope,
   buildSuccessEnvelope,
+  codeForResult,
   Invoker,
-  mapStopReasonToCode,
   type InvokeOptions,
 } from "@pihub/core";
 import { Console, Effect, Option } from "effect";
@@ -38,6 +38,13 @@ const sandboxFlag = Options.boolean("sandbox").pipe(
   Options.withDescription("Spawn pi in a fresh tempdir; remove it on exit"),
 );
 
+const timeoutOption = Options.integer("timeout").pipe(
+  Options.optional,
+  Options.withDescription(
+    "Hard timeout in seconds (precedence: flag > manifest.timeoutSeconds > 600s)",
+  ),
+);
+
 const readStdin = (): Effect.Effect<string> =>
   Effect.tryPromise({
     try: () => new Response(Bun.stdin.stream()).text(),
@@ -56,8 +63,9 @@ export const invokeCommand = Command.make(
     envelope: envelopeFlag,
     cwd: cwdOption,
     sandbox: sandboxFlag,
+    timeout: timeoutOption,
   },
-  ({ name, task, stream, envelope, cwd, sandbox }) =>
+  ({ name, task, stream, envelope, cwd, sandbox, timeout }) =>
     Effect.gen(function* () {
       const invoker = yield* Invoker;
       const taskText = task._tag === "Some" ? task.value : yield* readStdin();
@@ -66,9 +74,20 @@ export const invokeCommand = Command.make(
         process.exitCode = 2;
         return;
       }
-      const invokeOpts: InvokeOptions = {};
+
+      // Wire SIGINT → AbortController so Ctrl-C from the caller forwards to pi
+      // through the same termination logic that timeout uses. The handler is
+      // removed in `finally` so re-runs don't accumulate listeners.
+      const ac = new AbortController();
+      const onSigint = () => ac.abort();
+      process.on("SIGINT", onSigint);
+
+      const invokeOpts: InvokeOptions = { signal: ac.signal };
       if (Option.isSome(cwd)) (invokeOpts as { cwd: string }).cwd = cwd.value;
       if (sandbox) (invokeOpts as { sandbox: boolean }).sandbox = true;
+      if (Option.isSome(timeout)) {
+        (invokeOpts as { timeoutSeconds: number }).timeoutSeconds = timeout.value;
+      }
 
       const result = yield* invoker.invoke(name, taskText, invokeOpts).pipe(
         Effect.catchTag("InvokeInvalidArgsError", (e) =>
@@ -85,20 +104,26 @@ export const invokeCommand = Command.make(
             return null;
           }),
         ),
+        Effect.ensuring(Effect.sync(() => process.removeListener("SIGINT", onSigint))),
       );
       if (result === null) return;
+
+      // Map exit codes per CONTEXT.md: 124 timeout, 130 abort, 1 generic failure.
+      const setExit = () => {
+        if (result.exitCode === 0) return;
+        if (result.terminationReason === "timeout") process.exitCode = 124;
+        else if (result.terminationReason === "abort") process.exitCode = 130;
+        else process.exitCode = 1;
+      };
 
       if (envelope) {
         if (stream) process.stderr.write(result.raw);
         const env =
           result.exitCode === 0
             ? buildSuccessEnvelope(result)
-            : buildFailureEnvelope(
-                result,
-                mapStopReasonToCode(result.stopReason, result.errorMessage),
-              );
+            : buildFailureEnvelope(result, codeForResult(result));
         yield* Console.log(JSON.stringify(env));
-        if (result.exitCode !== 0) process.exitCode = 1;
+        setExit();
         return;
       }
 
@@ -107,7 +132,7 @@ export const invokeCommand = Command.make(
       }
       if (result.exitCode !== 0) {
         if (!stream && result.stderr.length > 0) yield* Console.error(result.stderr.trim());
-        process.exitCode = 1;
+        setExit();
         return;
       }
       if (!stream) yield* Console.log(result.text);

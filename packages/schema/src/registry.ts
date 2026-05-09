@@ -29,6 +29,8 @@ export const RegistryEntry = Schema.Struct({
   envDeclared: Schema.Array(Schema.String),
   linked: Schema.optionalWith(Schema.Boolean, { default: () => false }),
   permissions: Schema.optionalWith(Schema.Array(Schema.String), { default: () => [] }),
+  /** Manifest's `timeoutSeconds` if set; falls back to the global default at invoke time. */
+  timeoutSeconds: Schema.optional(Schema.Number),
 });
 export type RegistryEntry = typeof RegistryEntry.Type;
 
