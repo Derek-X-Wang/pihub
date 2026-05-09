@@ -25,6 +25,22 @@ export const mapStopReasonToCode = (
 };
 
 /**
+ * Choose the envelope `error.code` for an InvokeResult. External termination
+ * (timeout/abort) and exit-code conventions take precedence over the
+ * stopReason heuristic.
+ */
+export const codeForResult = (result: {
+  readonly exitCode: number;
+  readonly terminationReason: "timeout" | "abort" | null;
+  readonly stopReason: string | undefined;
+  readonly errorMessage: string;
+}): ErrorCode => {
+  if (result.terminationReason === "timeout" || result.exitCode === 124) return "timeout";
+  if (result.terminationReason === "abort" || result.exitCode === 130) return "abort";
+  return mapStopReasonToCode(result.stopReason, result.errorMessage);
+};
+
+/**
  * Build a SuccessEnvelope from an InvokeResult. Caller decides when to use
  * this — typically when `exitCode === 0`.
  */
