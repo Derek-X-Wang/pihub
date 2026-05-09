@@ -25,6 +25,7 @@ import {
   ShapeDetector,
   SourceFetcher,
   TarExtractor,
+  Updater,
 } from "@pihub/core";
 import { Effect, Layer } from "effect";
 import { rootCommand } from "./commands.js";
@@ -67,9 +68,13 @@ const Leaves = Layer.mergeAll(
 // output is visible inside EphemeralRunner.Live's Effect.gen.
 const InvokerLayers = EphemeralRunner.Live.pipe(Layer.provideMerge(Invoker.Live));
 
-const AppLayer = Layer.mergeAll(Installer.Live, Describe.Live, Remover.Live, InvokerLayers).pipe(
-  Layer.provideMerge(Leaves),
-);
+const AppLayer = Layer.mergeAll(
+  Installer.Live,
+  Describe.Live,
+  Remover.Live,
+  Updater.Live,
+  InvokerLayers,
+).pipe(Layer.provideMerge(Leaves));
 
 const cli = Command.run(rootCommand, {
   name: "pihub",

@@ -197,7 +197,9 @@ export class ShapeDetector extends Context.Tag("ShapeDetector")<
   );
 
   /**
-   * Test layer with a configurable canned-answer Map. Default behaviour: any
+   * Test layer with a configurable canned-answer Map. Use the `*` key as a
+   * wildcard fallback when tests can't predict the source path (e.g. random
+   * tempdirs from `pihub update --dry-run`). Default behaviour: any
    * unrecognised path fails with `InvalidShapeError` so tests must explicitly
    * seed expectations.
    */
@@ -210,7 +212,7 @@ export class ShapeDetector extends Context.Tag("ShapeDetector")<
           detect: (sourceDir) =>
             Effect.gen(function* () {
               const map = yield* Ref.get(store);
-              const hit = map.get(sourceDir);
+              const hit = map.get(sourceDir) ?? map.get("*");
               if (!hit) {
                 return yield* Effect.fail(
                   new InvalidShapeError({
