@@ -7,6 +7,7 @@ import { installCommand } from "./commands/install.js";
 import { invokeCommand } from "./commands/invoke.js";
 import { listCommand } from "./commands/list.js";
 import { logsCommand } from "./commands/logs.js";
+import { gcRuntimeCommand, runtimeCommand } from "./commands/runtime.js";
 
 export const rootCommand = Command.make("pihub").pipe(
   Command.withDescription(
@@ -21,5 +22,7 @@ export const rootCommand = Command.make("pihub").pipe(
     aliasCommand,
     logsCommand,
     gcLogsCommand,
+    runtimeCommand,
+    gcRuntimeCommand,
   ]),
 );

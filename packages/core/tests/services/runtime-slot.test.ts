@@ -1,5 +1,6 @@
 import { BunContext } from "@effect/platform-bun";
 import { it } from "@effect/vitest";
+import { RegistryEntry } from "@pihub/schema";
 import { Effect, Layer } from "effect";
 import * as fsp from "node:fs/promises";
 import * as os from "node:os";
@@ -8,6 +9,7 @@ import { afterEach, beforeEach, describe, expect } from "vitest";
 import { BunInstallError } from "../../src/errors.js";
 import { Paths } from "../../src/paths.js";
 import { BunInstaller } from "../../src/services/bun-installer.js";
+import { RegistryStore } from "../../src/services/registry-store.js";
 import { RuntimeSlotManager } from "../../src/services/runtime-slot.js";
 
 /**
@@ -34,9 +36,16 @@ const fakeInstaller = (slotDir: string) =>
       }),
   });
 
-const buildLiveLayer = (homeDir: string) =>
+const buildLiveLayer = (homeDir: string, registryEntries: ReadonlyArray<RegistryEntry> = []) =>
   RuntimeSlotManager.Live.pipe(
-    Layer.provide(Layer.mergeAll(Paths.Test(homeDir), BunContext.layer, fakeInstaller(homeDir))),
+    Layer.provide(
+      Layer.mergeAll(
+        Paths.Test(homeDir),
+        BunContext.layer,
+        fakeInstaller(homeDir),
+        RegistryStore.Test(registryEntries),
+      ),
+    ),
   );
 
 describe("RuntimeSlotManager (live, faked BunInstaller)", () => {
@@ -86,4 +95,71 @@ describe("RuntimeSlotManager (live, faked BunInstaller)", () => {
       expect(stat2.mtimeMs).toBe(stat1.mtimeMs);
     }).pipe(Effect.provide(buildLiveLayer(home))),
   );
+
+  it.effect("listSlots reports refcount derived from registry entries", () =>
+    Effect.gen(function* () {
+      const manager = yield* RuntimeSlotManager;
+      yield* manager.ensureSlot("0.74");
+      yield* manager.ensureSlot("0.75");
+      const list = yield* manager.listSlots;
+      expect(list.map((s) => s.minor)).toEqual(["0.74", "0.75"]);
+      // 2 entries on 0.74, 0 on 0.75 — refcount derived from the registry seed.
+      const m = new Map(list.map((s) => [s.minor, s.refcount]));
+      expect(m.get("0.74")).toBe(2);
+      expect(m.get("0.75")).toBe(0);
+      // Path round-trips through Paths.Test.
+      expect(list[0]?.path).toContain("runtime/pi/0.74");
+    }).pipe(
+      Effect.provide(
+        buildLiveLayer(home, [{ ...sampleEntry("a", "0.74") }, { ...sampleEntry("b", "0.74") }]),
+      ),
+    ),
+  );
+
+  it.effect("removeSlot fails when refcount > 0 (RuntimeSlotError)", () =>
+    Effect.gen(function* () {
+      const manager = yield* RuntimeSlotManager;
+      yield* manager.ensureSlot("0.74");
+      const exit = yield* Effect.exit(manager.removeSlot("0.74"));
+      expect(exit._tag).toBe("Failure");
+      expect(JSON.stringify(exit)).toContain("RuntimeSlotError");
+      expect(JSON.stringify(exit)).toContain("agent(s) pin it");
+    }).pipe(Effect.provide(buildLiveLayer(home, [sampleEntry("a", "0.74")]))),
+  );
+
+  it.effect("removeSlot succeeds when refcount = 0", () =>
+    Effect.gen(function* () {
+      const manager = yield* RuntimeSlotManager;
+      yield* manager.ensureSlot("0.74");
+      yield* manager.removeSlot("0.74");
+      const list = yield* manager.listSlots;
+      expect(list).toEqual([]);
+    }).pipe(Effect.provide(buildLiveLayer(home, []))),
+  );
+
+  it.effect("gc removes only unreferenced slots", () =>
+    Effect.gen(function* () {
+      const manager = yield* RuntimeSlotManager;
+      yield* manager.ensureSlot("0.74");
+      yield* manager.ensureSlot("0.75");
+      const deleted = yield* manager.gc;
+      expect([...deleted].sort()).toEqual(["0.75"]);
+      const list = yield* manager.listSlots;
+      expect(list.map((s) => s.minor)).toEqual(["0.74"]);
+    }).pipe(Effect.provide(buildLiveLayer(home, [sampleEntry("a", "0.74")]))),
+  );
+});
+
+const sampleEntry = (name: string, piSlot: string): RegistryEntry => ({
+  name,
+  shape: "alpha",
+  piSlot,
+  source: `/abs/${name}`,
+  ref: "tree-abc",
+  commitSha: "abc",
+  description: "",
+  invoke: `pihub invoke ${name} "<task>"`,
+  envDeclared: [],
+  linked: false,
+  permissions: [],
 });
