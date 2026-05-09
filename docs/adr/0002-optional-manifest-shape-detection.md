@@ -1,6 +1,6 @@
 # Optional manifest, zero-config Pi-shape detection
 
-PiHub does not require a `pihub.json` manifest in installed agent repos. Instead, `pihub install <url>` auto-detects shape α (Pi package — `pi` field in `package.json`) or shape β (markdown agents — `agents/*.md` with YAML frontmatter) and configures the install accordingly. Manifest is purely an *override* layer for cases where defaults aren't sufficient.
+PiHub does not require a `pihub.json` manifest in installed agent repos. Instead, `pihub install <url>` auto-detects shape α (Pi package — `pi` field in `package.json`) or shape β (markdown agents — `agents/*.md` with YAML frontmatter) and configures the install accordingly. Manifest is purely an _override_ layer for cases where defaults aren't sufficient.
 
 ## Considered Options
 
