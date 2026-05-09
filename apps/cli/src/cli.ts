@@ -7,6 +7,7 @@ import {
   Describe,
   EnvResolver,
   EnvStore,
+  EphemeralRunner,
   GitClient,
   GithubApi,
   Installer,
@@ -61,7 +62,11 @@ const Leaves = Layer.mergeAll(
   EnvLayers,
 ).pipe(Layer.provideMerge(Base));
 
-const AppLayer = Layer.mergeAll(Installer.Live, Describe.Live, Invoker.Live).pipe(
+// EphemeralRunner depends on Invoker. Chain it so Invoker.Live's Invoker
+// output is visible inside EphemeralRunner.Live's Effect.gen.
+const InvokerLayers = EphemeralRunner.Live.pipe(Layer.provideMerge(Invoker.Live));
+
+const AppLayer = Layer.mergeAll(Installer.Live, Describe.Live, InvokerLayers).pipe(
   Layer.provideMerge(Leaves),
 );
 
