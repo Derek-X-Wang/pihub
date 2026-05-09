@@ -2,6 +2,7 @@
 import { Command } from "@effect/cli";
 import { BunContext, BunRuntime } from "@effect/platform-bun";
 import {
+  Describe,
   GitClient,
   GithubApi,
   Installer,
@@ -37,7 +38,7 @@ const Leaves = Layer.mergeAll(
   RegistryStore.Live,
 ).pipe(Layer.provideMerge(Base));
 
-const AppLayer = Installer.Live.pipe(Layer.provideMerge(Leaves));
+const AppLayer = Layer.mergeAll(Installer.Live, Describe.Live).pipe(Layer.provideMerge(Leaves));
 
 const cli = Command.run(rootCommand, {
   name: "pihub",

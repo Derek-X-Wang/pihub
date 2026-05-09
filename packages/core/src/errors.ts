@@ -102,3 +102,12 @@ export class LinkSourceUnsupportedError extends Schema.TaggedError<LinkSourceUns
     message: Schema.String,
   },
 ) {}
+
+/** `pihub describe <name>` lookup failed — no registry entry for that name. */
+export class AgentNotFoundError extends Schema.TaggedError<AgentNotFoundError>()(
+  "AgentNotFoundError",
+  {
+    name: Schema.String,
+    message: Schema.String,
+  },
+) {}

@@ -99,6 +99,7 @@ const buildBetaEntry = (
     invoke: `pihub invoke ${name} "<task>"`,
     envDeclared: manifest.env ? [...manifest.env] : [],
     linked: info.link,
+    permissions: manifest.permissions ? [...manifest.permissions] : [],
   };
 };
 
