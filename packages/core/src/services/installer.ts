@@ -9,6 +9,7 @@ import {
   InvalidShapeError,
   LockfileError,
   ManifestParseError,
+  NpmVersionNotFoundError,
   ProfileError,
   RefNotFoundError,
   RegistryError,
@@ -37,7 +38,8 @@ export type InstallerError =
   | SourceFetchError
   | GithubApiError
   | RefNotFoundError
-  | GitCloneError;
+  | GitCloneError
+  | NpmVersionNotFoundError;
 
 export interface InstallResult {
   readonly agentRoot: string;
@@ -50,14 +52,18 @@ export interface InstallerShape {
 }
 
 /**
- * Derive the canonical agent-root name from a source URL or local path. For
- * local paths this is the basename of the absolute resolved path; for GitHub
- * sources it is `<owner>/<repo>`. The `:` separator for sub-agents (β) is
- * appended later when registry entries are built.
+ * Derive the canonical agent-root name from a source URL or local path:
+ * - github → `<owner>/<repo>`
+ * - npm    → `<package>` (preserves leading `@scope/` for scoped packages)
+ * - local  → directory basename
+ *
+ * The `:` separator for sub-agents (β) is appended later when registry
+ * entries are built.
  */
 const computeAgentRoot = (source: string): string => {
   const parsed = parseSource(source);
   if (parsed?.kind === "github") return `${parsed.owner}/${parsed.repo}`;
+  if (parsed?.kind === "npm") return parsed.packageName;
   if (parsed?.kind === "local") {
     return path.basename(parsed.absolutePath.replace(/\/+$/, ""));
   }

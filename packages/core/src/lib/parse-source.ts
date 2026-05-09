@@ -1,8 +1,9 @@
 import * as path from "node:path";
 
 /**
- * Discriminated union over the v1 source URL kinds. Slice #5 adds an `npm`
- * variant; slice #4 ships only `local` and `github`.
+ * Discriminated union over the v1 source URL kinds: local path, github clone,
+ * and npm package. Future kinds (gitlab, bitbucket, ssh) come post-v1 — see
+ * CONTEXT.md "Source URL kinds".
  */
 export type ParsedSource =
   | { readonly kind: "local"; readonly absolutePath: string }
@@ -13,11 +14,21 @@ export type ParsedSource =
       readonly ref: string | undefined;
       /** Canonical normalised form, e.g. `github:owner/repo` or `github:owner/repo@v0.3.0`. */
       readonly normalized: string;
+    }
+  | {
+      readonly kind: "npm";
+      /** Full package name including scope when present, e.g. `@mariozechner/pi-coding-agent`. */
+      readonly packageName: string;
+      readonly version: string | undefined;
+      /** Canonical normalised form, e.g. `npm:pkg` or `npm:@scope/pkg@1.0.0`. */
+      readonly normalized: string;
     };
 
 const GH_SHORTHAND = /^github:([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:@([^\s]+))?$/;
 const GH_HTTPS =
   /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+?)(?:\.git)?\/?(?:@([^\s]+))?$/;
+const NPM_PREFIX = /^npm:(.+)$/;
+const NPM_PACKAGE_NAME = /^(?:@[A-Za-z0-9_.-]+\/)?[A-Za-z0-9_.-]+$/;
 
 const buildGithub = (
   owner: string,
@@ -29,6 +40,34 @@ const buildGithub = (
   repo,
   ref,
   normalized: `github:${owner}/${repo}${ref ? `@${ref}` : ""}`,
+});
+
+/**
+ * Splits an `npm:` payload into package name + optional version. Scoped
+ * packages start with `@`, so the version separator is the *last* `@` whose
+ * index is greater than zero. `@scope/pkg` therefore returns no version,
+ * while `pkg@1.0.0` and `@scope/pkg@1.0.0` both yield the trailing version.
+ */
+const splitNpm = (payload: string): { packageName: string; version: string | undefined } | null => {
+  const lastAt = payload.lastIndexOf("@");
+  if (lastAt > 0) {
+    const packageName = payload.slice(0, lastAt);
+    const version = payload.slice(lastAt + 1);
+    if (!NPM_PACKAGE_NAME.test(packageName) || version.length === 0) return null;
+    return { packageName, version };
+  }
+  if (!NPM_PACKAGE_NAME.test(payload)) return null;
+  return { packageName: payload, version: undefined };
+};
+
+const buildNpm = (
+  packageName: string,
+  version: string | undefined,
+): Extract<ParsedSource, { kind: "npm" }> => ({
+  kind: "npm",
+  packageName,
+  version,
+  normalized: `npm:${packageName}${version ? `@${version}` : ""}`,
 });
 
 /**
@@ -45,6 +84,13 @@ export const parseSource = (raw: string): ParsedSource | null => {
 
   const m2 = GH_HTTPS.exec(trimmed);
   if (m2) return buildGithub(m2[1] as string, m2[2] as string, m2[3]);
+
+  const m3 = NPM_PREFIX.exec(trimmed);
+  if (m3) {
+    const split = splitNpm(m3[1] as string);
+    if (split) return buildNpm(split.packageName, split.version);
+    return null;
+  }
 
   if (
     trimmed === "." ||

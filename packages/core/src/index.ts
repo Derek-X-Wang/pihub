@@ -13,3 +13,5 @@ export * from "./services/registry-store.js";
 export * from "./services/installer.js";
 export * from "./services/github-api.js";
 export * from "./services/git-client.js";
+export * from "./services/npm-registry.js";
+export * from "./services/tar-extractor.js";

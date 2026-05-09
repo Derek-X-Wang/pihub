@@ -73,3 +73,13 @@ export class GitCloneError extends Schema.TaggedError<GitCloneError>()("GitClone
   dest: Schema.String,
   message: Schema.String,
 }) {}
+
+/** A specific npm package@version pair does not exist on the registry. */
+export class NpmVersionNotFoundError extends Schema.TaggedError<NpmVersionNotFoundError>()(
+  "NpmVersionNotFoundError",
+  {
+    packageName: Schema.String,
+    version: Schema.String,
+    message: Schema.String,
+  },
+) {}
