@@ -62,10 +62,7 @@ describe("Remover (live, real FS)", () => {
       const remover = yield* Remover;
       const result = yield* remover.remove("owner/repo");
       expect(result.agentRoot).toBe("owner/repo");
-      expect([...result.removedEntries].sort()).toEqual([
-        "owner/repo:planner",
-        "owner/repo:scout",
-      ]);
+      expect([...result.removedEntries].sort()).toEqual(["owner/repo:planner", "owner/repo:scout"]);
       expect([...result.removedAliases].sort()).toEqual(["scout"]);
 
       // Disk gone.
